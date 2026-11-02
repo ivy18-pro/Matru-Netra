@@ -20,7 +20,13 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     designation TEXT,
     assigned_sub_centre TEXT,
     assigned_phc TEXT,
-    account_status TEXT NOT NULL DEFAULT 'active' CHECK (account_status IN ('active', 'pending_approval', 'suspended')),
+    medical_reg_no TEXT,
+    hospital_affiliation TEXT,
+    asha_worker_id TEXT,
+    assigned_village TEXT,
+    account_status TEXT NOT NULL DEFAULT 'active' CHECK (account_status IN ('active', 'pending_approval', 'rejected', 'suspended')),
+    verified_at TIMESTAMPTZ,
+    verified_by TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -34,7 +40,7 @@ CREATE POLICY "Users can view own profile"
 ON public.profiles FOR SELECT 
 USING (auth.uid() = id);
 
--- Healthcare workers can view profiles of mothers within their jurisdiction
+-- Verified Healthcare workers can view profiles of mothers within their jurisdiction
 CREATE POLICY "Doctors and ASHAs can view mother profiles in their jurisdiction" 
 ON public.profiles FOR SELECT 
 USING (
@@ -42,6 +48,7 @@ USING (
         SELECT 1 FROM public.profiles AS worker 
         WHERE worker.id = auth.uid() 
         AND worker.role IN ('doctor', 'asha')
+        AND worker.account_status = 'active'
     )
 );
 
@@ -96,12 +103,17 @@ CREATE POLICY "Mothers can view only their own record"
 ON public.maternal_patients FOR SELECT 
 USING (auth.uid() = user_id);
 
--- An ASHA worker can view and manage mothers assigned to her
+-- An ASHA worker can view and manage mothers assigned to her (only when account is verified/active)
 CREATE POLICY "ASHA can view assigned patients" 
 ON public.maternal_patients FOR SELECT 
 USING (
-    auth.uid() = assigned_asha_id OR 
-    sub_centre = (SELECT assigned_sub_centre FROM public.profiles WHERE id = auth.uid())
+    EXISTS (
+        SELECT 1 FROM public.profiles 
+        WHERE id = auth.uid() AND role = 'asha' AND account_status = 'active'
+    ) AND (
+        auth.uid() = assigned_asha_id OR 
+        sub_centre = (SELECT assigned_sub_centre FROM public.profiles WHERE id = auth.uid())
+    )
 );
 
 CREATE POLICY "ASHA can insert new mother registrations" 
@@ -109,21 +121,27 @@ ON public.maternal_patients FOR INSERT
 WITH CHECK (
     EXISTS (
         SELECT 1 FROM public.profiles 
-        WHERE id = auth.uid() AND role = 'asha'
+        WHERE id = auth.uid() AND role = 'asha' AND account_status = 'active'
     )
 );
 
 CREATE POLICY "ASHA can update assigned mother records" 
 ON public.maternal_patients FOR UPDATE 
-USING (auth.uid() = assigned_asha_id);
+USING (
+    auth.uid() = assigned_asha_id AND
+    EXISTS (
+        SELECT 1 FROM public.profiles 
+        WHERE id = auth.uid() AND role = 'asha' AND account_status = 'active'
+    )
+);
 
--- Doctors can view all patients in their PHC
+-- Doctors can view all patients in their PHC (only when account is verified/active)
 CREATE POLICY "Doctors can view and manage PHC patients" 
 ON public.maternal_patients FOR ALL 
 USING (
     EXISTS (
         SELECT 1 FROM public.profiles 
-        WHERE id = auth.uid() AND role = 'doctor'
+        WHERE id = auth.uid() AND role = 'doctor' AND account_status = 'active'
     )
 );
 
@@ -225,8 +243,8 @@ USING (
 
 -- ----------------------------------------------------------------------------
 -- 5. AUTOMATIC PROFILE CREATION TRIGGER
--- When a user registers through Supabase Auth, securely insert profile
--- Note: Doctor and ASHA roles require administrative approval/invitation.
+-- When a user registers through Supabase Auth, securely insert profile.
+-- Doctor and ASHA roles require institutional verification before activation.
 -- ----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
@@ -234,18 +252,32 @@ DECLARE
     user_role TEXT;
     user_name TEXT;
     user_phone TEXT;
+    user_location TEXT;
+    user_status TEXT;
+    user_med_reg TEXT;
+    user_hospital TEXT;
+    user_asha_id TEXT;
     user_village TEXT;
 BEGIN
     -- Extract metadata supplied during registration
     user_role := COALESCE(new.raw_user_meta_data->>'role', 'mother');
     user_name := COALESCE(new.raw_user_meta_data->>'full_name', 'Beneficiary');
     user_phone := new.raw_user_meta_data->>'phone';
-    user_village := new.raw_user_meta_data->>'village';
+    user_location := COALESCE(new.raw_user_meta_data->>'hospital_affiliation', new.raw_user_meta_data->>'assigned_village', new.raw_user_meta_data->>'village', 'General Catchment');
+    user_med_reg := new.raw_user_meta_data->>'medical_reg_no';
+    user_hospital := new.raw_user_meta_data->>'hospital_affiliation';
+    user_asha_id := new.raw_user_meta_data->>'asha_worker_id';
+    user_village := new.raw_user_meta_data->>'assigned_village';
 
-    -- Security check: Prevent public self-registration from claiming doctor or asha roles
-    -- unless created via service-role / admin invitation
-    IF user_role IN ('doctor', 'asha') AND (new.raw_user_meta_data->>'invited_by_admin') IS NULL THEN
-        user_role := 'mother'; -- Default to mother if not admin-invited
+    -- Doctor and ASHA registrations start as pending_approval unless pre-verified by admin
+    IF user_role IN ('doctor', 'asha') THEN
+        IF (new.raw_user_meta_data->>'invited_by_admin') = 'true' THEN
+            user_status := 'active';
+        ELSE
+            user_status := 'pending_approval';
+        END IF;
+    ELSE
+        user_status := 'active';
     END IF;
 
     INSERT INTO public.profiles (
@@ -256,6 +288,10 @@ BEGIN
         phone, 
         location,
         designation,
+        medical_reg_no,
+        hospital_affiliation,
+        asha_worker_id,
+        assigned_village,
         account_status
     )
     VALUES (
@@ -264,13 +300,17 @@ BEGIN
         user_role,
         user_name,
         user_phone,
-        user_village,
+        user_location,
         CASE 
-            WHEN user_role = 'doctor' THEN 'Medical Officer In-Charge'
-            WHEN user_role = 'asha' THEN 'ASHA Field Worker'
+            WHEN user_role = 'doctor' THEN 'Medical Officer (Verification Pending)'
+            WHEN user_role = 'asha' THEN 'ASHA Field Worker (Verification Pending)'
             ELSE 'Beneficiary Mother'
         END,
-        'active'
+        user_med_reg,
+        user_hospital,
+        user_asha_id,
+        user_village,
+        user_status
     );
 
     RETURN NEW;

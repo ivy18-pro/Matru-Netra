@@ -8,7 +8,6 @@ import {
   Mail, 
   Phone, 
   MapPin, 
-  Calendar, 
   ShieldCheck, 
   AlertCircle, 
   Eye, 
@@ -18,6 +17,8 @@ import {
   Users, 
   Heart,
   CheckCircle2,
+  Building2,
+  FileBadge,
   Key
 } from 'lucide-react';
 
@@ -27,6 +28,8 @@ export const AuthModal: React.FC = () => {
     setLoginModalOpen, 
     loginWithCredentials, 
     registerMotherPatient, 
+    registerDoctor,
+    registerAsha,
     authModalDefaultRole,
     requestPasswordReset
   } = useCare();
@@ -35,14 +38,26 @@ export const AuthModal: React.FC = () => {
   const [isRegistering, setIsRegistering] = useState<boolean>(false);
   const [isForgotPassword, setIsForgotPassword] = useState<boolean>(false);
 
-  // Form states (Clean, zero pre-filled hardcoded credentials)
+  // Universal fields
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
+
+  // Mother specific fields
   const [village, setVillage] = useState('');
   const [gestationalWeeks, setGestationalWeeks] = useState(12);
+
+  // Doctor specific fields
+  const [medicalRegNo, setMedicalRegNo] = useState('');
+  const [hospitalAffiliation, setHospitalAffiliation] = useState('');
+
+  // ASHA specific fields
+  const [ashaWorkerId, setAshaWorkerId] = useState('');
+  const [assignedVillage, setAssignedVillage] = useState('');
+  const [associatedPhc, setAssociatedPhc] = useState('');
 
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -61,12 +76,27 @@ export const AuthModal: React.FC = () => {
 
   if (!loginModalOpen) return null;
 
+  const resetFormFields = () => {
+    setEmail('');
+    setPassword('');
+    setConfirmPassword('');
+    setFullName('');
+    setPhone('');
+    setVillage('');
+    setMedicalRegNo('');
+    setHospitalAffiliation('');
+    setAshaWorkerId('');
+    setAssignedVillage('');
+    setAssociatedPhc('');
+  };
+
   const handleTabSelect = (role: UserRole) => {
     setActiveTab(role);
     setErrorMsg('');
     setSuccessMsg('');
     setIsRegistering(false);
     setIsForgotPassword(false);
+    resetFormFields();
   };
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
@@ -77,10 +107,8 @@ export const AuthModal: React.FC = () => {
 
     try {
       await loginWithCredentials(email, password, activeTab);
-      // Close modal on successful authentication
       setLoginModalOpen(false);
-      setEmail('');
-      setPassword('');
+      resetFormFields();
     } catch (err: any) {
       setErrorMsg(err.message || 'Authentication failed. Please verify your credentials.');
     } finally {
@@ -94,22 +122,50 @@ export const AuthModal: React.FC = () => {
     setErrorMsg('');
     setSuccessMsg('');
 
+    // Password match validation
+    if (password !== confirmPassword) {
+      setErrorMsg('Passwords do not match. Please verify your password confirmation.');
+      setIsLoading(false);
+      return;
+    }
+
     try {
-      await registerMotherPatient({
-        email,
-        password,
-        fullName,
-        phone,
-        village,
-        age: 24,
-        gestationalWeeks
-      });
-      setLoginModalOpen(false);
-      setEmail('');
-      setPassword('');
-      setFullName('');
-      setPhone('');
-      setVillage('');
+      if (activeTab === 'doctor') {
+        const confirmText = await registerDoctor({
+          fullName,
+          email,
+          phone,
+          medicalRegNo,
+          hospitalAffiliation,
+          password
+        });
+        setSuccessMsg(confirmText);
+        resetFormFields();
+      } else if (activeTab === 'asha') {
+        const confirmText = await registerAsha({
+          fullName,
+          email,
+          phone,
+          ashaWorkerId,
+          assignedVillage,
+          associatedPhc,
+          password
+        });
+        setSuccessMsg(confirmText);
+        resetFormFields();
+      } else {
+        await registerMotherPatient({
+          email,
+          password,
+          fullName,
+          phone,
+          village: village || 'Village Kalyanpur',
+          age: 24,
+          gestationalWeeks
+        });
+        setLoginModalOpen(false);
+        resetFormFields();
+      }
     } catch (err: any) {
       setErrorMsg(err.message || 'Registration failed. Please check your information.');
     } finally {
@@ -153,12 +209,13 @@ export const AuthModal: React.FC = () => {
           background: '#FFFFFF',
           borderRadius: 'var(--radius-xl)',
           width: '100%',
-          maxWidth: '500px',
+          maxWidth: isRegistering ? '540px' : '480px',
           boxShadow: '0 25px 60px -15px rgba(0, 0, 0, 0.5)',
           overflow: 'hidden',
           border: '1px solid var(--border-subtle)',
           display: 'flex',
-          flexDirection: 'column'
+          flexDirection: 'column',
+          transition: 'max-width 0.2s ease'
         }}
       >
         {/* Modal Header */}
@@ -178,7 +235,9 @@ export const AuthModal: React.FC = () => {
               <ShieldCheck size={16} /> Secure Healthcare Authentication
             </div>
             <h3 style={{ fontSize: '1.25rem', color: '#FFFFFF', margin: 0, fontWeight: 800 }}>
-              {isRegistering ? 'Register Mother Account' : (isForgotPassword ? 'Password Recovery' : 'MATRU-NETRA Sign In')}
+              {isRegistering 
+                ? (activeTab === 'doctor' ? 'Register as Doctor' : (activeTab === 'asha' ? 'Register as ASHA Worker' : 'Register Mother Account'))
+                : (isForgotPassword ? 'Password Recovery' : 'MATRU-NETRA Sign In')}
             </h3>
           </div>
           <button 
@@ -192,7 +251,8 @@ export const AuthModal: React.FC = () => {
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              cursor: 'pointer'
+              cursor: 'pointer',
+              border: 'none'
             }}
           >
             <X size={18} />
@@ -287,7 +347,7 @@ export const AuthModal: React.FC = () => {
         )}
 
         {/* Modal Form Body */}
-        <div style={{ padding: '1.75rem', overflowY: 'auto', maxHeight: '70vh' }}>
+        <div style={{ padding: '1.75rem', overflowY: 'auto', maxHeight: '72vh' }}>
           
           {/* Error Message Alert */}
           {errorMsg && (
@@ -344,7 +404,7 @@ export const AuthModal: React.FC = () => {
 
               <div style={{ marginBottom: '1.25rem' }}>
                 <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: 'var(--navy-deep)', marginBottom: '0.35rem' }}>
-                  Registered Email Address
+                  Registered Email Address *
                 </label>
                 <div style={{ position: 'relative' }}>
                   <input
@@ -386,22 +446,49 @@ export const AuthModal: React.FC = () => {
             </form>
           ) : isRegistering ? (
             /* -------------------------------------------------------------
-               MODE 2: PATIENT / MOTHER REGISTRATION FORM
+               MODE 2: REGISTRATION FORMS (Doctor, ASHA Worker, Mother)
                ------------------------------------------------------------- */
             <form onSubmit={handleRegistrationSubmit}>
-              <div style={{ background: '#FFF7ED', padding: '0.75rem', borderRadius: 'var(--radius-md)', border: '1px solid #FFEDD5', marginBottom: '1.25rem', fontSize: '0.8rem', color: '#9A3412' }}>
-                🤰 Register your maternal care journey to view verified checkups, doctor advice, and child growth records.
+
+              {/* Role Context Notice */}
+              <div 
+                style={{ 
+                  background: activeTab === 'doctor' ? '#F0F9FF' : (activeTab === 'asha' ? '#F0FDF4' : '#FFF7ED'), 
+                  padding: '0.85rem', 
+                  borderRadius: 'var(--radius-md)', 
+                  border: `1px solid ${activeTab === 'doctor' ? '#BAE6FD' : (activeTab === 'asha' ? '#BBF7D0' : '#FFEDD5')}`, 
+                  marginBottom: '1.25rem', 
+                  fontSize: '0.82rem', 
+                  color: activeTab === 'doctor' ? '#0369A1' : (activeTab === 'asha' ? '#15803D' : '#9A3412')
+                }}
+              >
+                {activeTab === 'doctor' && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 700 }}>
+                    <Stethoscope size={16} /> Doctor Registration: Enter your institutional medical credentials. Accounts are activated following PHC administrative review.
+                  </div>
+                )}
+                {activeTab === 'asha' && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 700 }}>
+                    <Users size={16} /> ASHA Worker Registration: Register your village catchment and PHC link. Credentials undergo jurisdiction verification.
+                  </div>
+                )}
+                {activeTab === 'mother' && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 700 }}>
+                    <Heart size={16} /> Mother Registration: Start your connected care journey to access verified ANC visits and emergency assistance.
+                  </div>
+                )}
               </div>
 
+              {/* Full Name */}
               <div style={{ marginBottom: '1rem' }}>
                 <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: 'var(--navy-deep)', marginBottom: '0.35rem' }}>
-                  Mother's Full Name *
+                  {activeTab === 'doctor' ? 'Full Name (with Title) *' : (activeTab === 'asha' ? "ASHA Worker's Full Name *" : "Mother's Full Name *")}
                 </label>
                 <div style={{ position: 'relative' }}>
                   <input
                     type="text"
                     required
-                    placeholder="e.g. Sunita Devi"
+                    placeholder={activeTab === 'doctor' ? 'e.g. Dr. Ramesh Chandra, MBBS' : (activeTab === 'asha' ? 'e.g. Meera Devi' : 'e.g. Sunita Devi')}
                     value={fullName}
                     onChange={(e) => setFullName(e.target.value)}
                     style={{
@@ -416,30 +503,31 @@ export const AuthModal: React.FC = () => {
                 </div>
               </div>
 
-              <div style={{ marginBottom: '1rem' }}>
-                <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: 'var(--navy-deep)', marginBottom: '0.35rem' }}>
-                  Email Address *
-                </label>
-                <div style={{ position: 'relative' }}>
-                  <input
-                    type="email"
-                    required
-                    placeholder="e.g. mother@example.com"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    style={{
-                      width: '100%',
-                      padding: '0.65rem 0.75rem 0.65rem 2.25rem',
-                      borderRadius: 'var(--radius-md)',
-                      border: '1px solid var(--border-strong)',
-                      fontSize: '0.88rem'
-                    }}
-                  />
-                  <Mail size={16} color="#64748B" style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)' }} />
-                </div>
-              </div>
-
+              {/* Email Address & Phone */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '1rem' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: 'var(--navy-deep)', marginBottom: '0.35rem' }}>
+                    Email Address *
+                  </label>
+                  <div style={{ position: 'relative' }}>
+                    <input
+                      type="email"
+                      required
+                      placeholder="name@domain.com"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '0.65rem 0.75rem 0.65rem 2.25rem',
+                        borderRadius: 'var(--radius-md)',
+                        border: '1px solid var(--border-strong)',
+                        fontSize: '0.88rem'
+                      }}
+                    />
+                    <Mail size={15} color="#64748B" style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)' }} />
+                  </div>
+                </div>
+
                 <div>
                   <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: 'var(--navy-deep)', marginBottom: '0.35rem' }}>
                     Mobile Number *
@@ -462,18 +550,228 @@ export const AuthModal: React.FC = () => {
                     <Phone size={15} color="#64748B" style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)' }} />
                   </div>
                 </div>
+              </div>
 
+              {/* ROLE SPECIFIC FIELDS */}
+
+              {/* 1. DOCTOR SPECIFIC FIELDS */}
+              {activeTab === 'doctor' && (
+                <>
+                  <div style={{ marginBottom: '1rem' }}>
+                    <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: 'var(--navy-deep)', marginBottom: '0.35rem' }}>
+                      Medical Registration Number (MCI / State Medical Council) *
+                    </label>
+                    <div style={{ position: 'relative' }}>
+                      <input
+                        type="text"
+                        required
+                        placeholder="e.g. MCI-WB-54892 or SMC-49201"
+                        value={medicalRegNo}
+                        onChange={(e) => setMedicalRegNo(e.target.value)}
+                        style={{
+                          width: '100%',
+                          padding: '0.65rem 0.75rem 0.65rem 2.25rem',
+                          borderRadius: 'var(--radius-md)',
+                          border: '1px solid var(--border-strong)',
+                          fontSize: '0.88rem'
+                        }}
+                      />
+                      <FileBadge size={16} color="#0284C7" style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)' }} />
+                    </div>
+                  </div>
+
+                  <div style={{ marginBottom: '1rem' }}>
+                    <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: 'var(--navy-deep)', marginBottom: '0.35rem' }}>
+                      Healthcare Facility / PHC Affiliation *
+                    </label>
+                    <div style={{ position: 'relative' }}>
+                      <input
+                        type="text"
+                        required
+                        placeholder="e.g. PHC Rampur, Block Health Centre"
+                        value={hospitalAffiliation}
+                        onChange={(e) => setHospitalAffiliation(e.target.value)}
+                        style={{
+                          width: '100%',
+                          padding: '0.65rem 0.75rem 0.65rem 2.25rem',
+                          borderRadius: 'var(--radius-md)',
+                          border: '1px solid var(--border-strong)',
+                          fontSize: '0.88rem'
+                        }}
+                      />
+                      <Building2 size={16} color="#0284C7" style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)' }} />
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* 2. ASHA WORKER SPECIFIC FIELDS */}
+              {activeTab === 'asha' && (
+                <>
+                  <div style={{ marginBottom: '1rem' }}>
+                    <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: 'var(--navy-deep)', marginBottom: '0.35rem' }}>
+                      ASHA Worker ID (if available)
+                    </label>
+                    <div style={{ position: 'relative' }}>
+                      <input
+                        type="text"
+                        placeholder="e.g. ASHA-WB-3921 (Optional)"
+                        value={ashaWorkerId}
+                        onChange={(e) => setAshaWorkerId(e.target.value)}
+                        style={{
+                          width: '100%',
+                          padding: '0.65rem 0.75rem 0.65rem 2.25rem',
+                          borderRadius: 'var(--radius-md)',
+                          border: '1px solid var(--border-strong)',
+                          fontSize: '0.88rem'
+                        }}
+                      />
+                      <FileBadge size={16} color="var(--teal-primary)" style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)' }} />
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '1rem' }}>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: 'var(--navy-deep)', marginBottom: '0.35rem' }}>
+                        Assigned Village / Area *
+                      </label>
+                      <div style={{ position: 'relative' }}>
+                        <input
+                          type="text"
+                          required
+                          placeholder="e.g. Sonarpur"
+                          value={assignedVillage}
+                          onChange={(e) => setAssignedVillage(e.target.value)}
+                          style={{
+                            width: '100%',
+                            padding: '0.65rem 0.75rem 0.65rem 2.25rem',
+                            borderRadius: 'var(--radius-md)',
+                            border: '1px solid var(--border-strong)',
+                            fontSize: '0.88rem'
+                          }}
+                        />
+                        <MapPin size={15} color="var(--teal-primary)" style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)' }} />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: 'var(--navy-deep)', marginBottom: '0.35rem' }}>
+                        Associated PHC *
+                      </label>
+                      <div style={{ position: 'relative' }}>
+                        <input
+                          type="text"
+                          required
+                          placeholder="e.g. PHC Rampur"
+                          value={associatedPhc}
+                          onChange={(e) => setAssociatedPhc(e.target.value)}
+                          style={{
+                            width: '100%',
+                            padding: '0.65rem 0.75rem 0.65rem 2.25rem',
+                            borderRadius: 'var(--radius-md)',
+                            border: '1px solid var(--border-strong)',
+                            fontSize: '0.88rem'
+                          }}
+                        />
+                        <Building2 size={15} color="var(--teal-primary)" style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)' }} />
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* 3. MOTHER SPECIFIC FIELDS */}
+              {activeTab === 'mother' && (
+                <>
+                  <div style={{ marginBottom: '1rem' }}>
+                    <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: 'var(--navy-deep)', marginBottom: '0.35rem' }}>
+                      Village / Hamlet *
+                    </label>
+                    <div style={{ position: 'relative' }}>
+                      <input
+                        type="text"
+                        required
+                        placeholder="e.g. Kalyanpur"
+                        value={village}
+                        onChange={(e) => setVillage(e.target.value)}
+                        style={{
+                          width: '100%',
+                          padding: '0.65rem 0.75rem 0.65rem 2.25rem',
+                          borderRadius: 'var(--radius-md)',
+                          border: '1px solid var(--border-strong)',
+                          fontSize: '0.88rem'
+                        }}
+                      />
+                      <MapPin size={15} color="#64748B" style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)' }} />
+                    </div>
+                  </div>
+
+                  <div style={{ marginBottom: '1rem' }}>
+                    <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: 'var(--navy-deep)', marginBottom: '0.35rem' }}>
+                      Current Gestational Stage (Weeks Pregnant)
+                    </label>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                      <input
+                        type="range"
+                        min="4"
+                        max="40"
+                        value={gestationalWeeks}
+                        onChange={(e) => setGestationalWeeks(Number(e.target.value))}
+                        style={{ flex: 1, accentColor: '#EA580C' }}
+                      />
+                      <span style={{ fontWeight: 800, color: '#EA580C', fontSize: '0.9rem', minWidth: '70px' }}>
+                        Week {gestationalWeeks}
+                      </span>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* Passwords (Password + Confirm Password) */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '1.5rem' }}>
                 <div>
                   <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: 'var(--navy-deep)', marginBottom: '0.35rem' }}>
-                    Village / Hamlet *
+                    Password (min 6 chars) *
                   </label>
                   <div style={{ position: 'relative' }}>
                     <input
-                      type="text"
+                      type={showPassword ? 'text' : 'password'}
                       required
-                      placeholder="e.g. Kalyanpur"
-                      value={village}
-                      onChange={(e) => setVillage(e.target.value)}
+                      minLength={6}
+                      placeholder="Create password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '0.65rem 2.25rem 0.65rem 2.25rem',
+                        borderRadius: 'var(--radius-md)',
+                        border: '1px solid var(--border-strong)',
+                        fontSize: '0.88rem'
+                      }}
+                    />
+                    <Lock size={15} color="#64748B" style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)' }} />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      style={{ position: 'absolute', right: '0.65rem', top: '50%', transform: 'translateY(-50%)', color: '#64748B', background: 'none', border: 'none', cursor: 'pointer' }}
+                    >
+                      {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: 'var(--navy-deep)', marginBottom: '0.35rem' }}>
+                    Confirm Password *
+                  </label>
+                  <div style={{ position: 'relative' }}>
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      required
+                      minLength={6}
+                      placeholder="Confirm password"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
                       style={{
                         width: '100%',
                         padding: '0.65rem 0.75rem 0.65rem 2.25rem',
@@ -482,80 +780,49 @@ export const AuthModal: React.FC = () => {
                         fontSize: '0.88rem'
                       }}
                     />
-                    <MapPin size={15} color="#64748B" style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)' }} />
+                    <Lock size={15} color="#64748B" style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)' }} />
                   </div>
                 </div>
               </div>
 
-              <div style={{ marginBottom: '1rem' }}>
-                <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: 'var(--navy-deep)', marginBottom: '0.35rem' }}>
-                  Current Gestational Stage (Weeks Pregnant)
-                </label>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                  <input
-                    type="range"
-                    min="4"
-                    max="40"
-                    value={gestationalWeeks}
-                    onChange={(e) => setGestationalWeeks(Number(e.target.value))}
-                    style={{ flex: 1, accentColor: '#EA580C' }}
-                  />
-                  <span style={{ fontWeight: 800, color: '#EA580C', fontSize: '0.9rem', minWidth: '70px' }}>
-                    Week {gestationalWeeks}
-                  </span>
-                </div>
-              </div>
-
-              <div style={{ marginBottom: '1.5rem' }}>
-                <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: 'var(--navy-deep)', marginBottom: '0.35rem' }}>
-                  Create Account Password (min 6 characters) *
-                </label>
-                <div style={{ position: 'relative' }}>
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    required
-                    minLength={6}
-                    placeholder="Create a secure password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    style={{
-                      width: '100%',
-                      padding: '0.65rem 2.5rem 0.65rem 2.25rem',
-                      borderRadius: 'var(--radius-md)',
-                      border: '1px solid var(--border-strong)',
-                      fontSize: '0.88rem'
-                    }}
-                  />
-                  <Lock size={16} color="#64748B" style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)' }} />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    style={{ position: 'absolute', right: '0.75rem', top: '50%', transform: 'translateY(-50%)', color: '#64748B', background: 'none', border: 'none', cursor: 'pointer' }}
-                  >
-                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                  </button>
-                </div>
-              </div>
-
+              {/* Submit Button */}
               <button
                 type="submit"
                 disabled={isLoading}
                 className="btn btn-primary"
-                style={{ width: '100%', padding: '0.85rem', fontWeight: 700, background: 'linear-gradient(135deg, #EA580C 0%, #C2410C 100%)', marginBottom: '1rem' }}
+                style={{ 
+                  width: '100%', 
+                  padding: '0.85rem', 
+                  fontWeight: 700, 
+                  background: activeTab === 'doctor' 
+                    ? 'linear-gradient(135deg, #0284C7 0%, #0369A1 100%)' 
+                    : (activeTab === 'asha' ? 'linear-gradient(135deg, var(--teal-primary) 0%, var(--teal-dark) 100%)' : 'linear-gradient(135deg, #EA580C 0%, #C2410C 100%)'), 
+                  marginBottom: '1rem' 
+                }}
               >
-                {isLoading ? 'Creating Your Account...' : 'Complete Patient Registration'}
+                {isLoading 
+                  ? 'Submitting Registration...' 
+                  : (activeTab === 'doctor' ? 'Register as Doctor' : (activeTab === 'asha' ? 'Register as ASHA Worker' : 'Complete Patient Registration'))}
               </button>
 
+              {/* Link back to appropriate sign in */}
               <div style={{ textAlign: 'center', fontSize: '0.82rem' }}>
                 <span style={{ color: 'var(--text-secondary)' }}>Already registered? </span>
                 <button
                   type="button"
                   onClick={() => { setIsRegistering(false); setErrorMsg(''); setSuccessMsg(''); }}
-                  style={{ color: 'var(--teal-primary)', fontWeight: 700, background: 'none', border: 'none', cursor: 'pointer' }}
+                  style={{ 
+                    color: activeTab === 'doctor' ? '#0284C7' : (activeTab === 'asha' ? 'var(--teal-primary)' : '#EA580C'), 
+                    fontWeight: 700, 
+                    background: 'none', 
+                    border: 'none', 
+                    cursor: 'pointer' 
+                  }}
                 >
-                  Sign In Here
+                  ← Back to {activeTab === 'doctor' ? 'Doctor' : (activeTab === 'asha' ? 'ASHA' : 'Mother')} Sign In
                 </button>
               </div>
+
             </form>
           ) : (
             /* -------------------------------------------------------------
@@ -563,7 +830,7 @@ export const AuthModal: React.FC = () => {
                ------------------------------------------------------------- */
             <form onSubmit={handleLoginSubmit}>
               
-              {/* Role Context Pill & Controlled Process Notice */}
+              {/* Role Context Notice */}
               <div 
                 style={{
                   background: activeTab === 'doctor' ? '#F0F9FF' : (activeTab === 'asha' ? '#F0FDF4' : '#FFF7ED'),
@@ -650,14 +917,6 @@ export const AuthModal: React.FC = () => {
                 </div>
               </div>
 
-              {/* Privileged Account Provisioning Notice */}
-              {(activeTab === 'doctor' || activeTab === 'asha') && (
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                  <Key size={13} />
-                  <span>Privileged accounts are provisioned by State Health Mission administrators. Public self-registration is restricted.</span>
-                </div>
-              )}
-
               {/* Submit Button */}
               <button
                 type="submit"
@@ -677,19 +936,47 @@ export const AuthModal: React.FC = () => {
                 {!isLoading && <ArrowRight size={16} />}
               </button>
 
-              {/* Mother Registration Link (Only for Mother tab) */}
-              {activeTab === 'mother' && (
-                <div style={{ textAlign: 'center', borderTop: '1px solid #F1F5F9', paddingTop: '1rem', fontSize: '0.82rem' }}>
-                  <span style={{ color: 'var(--text-secondary)' }}>Are you an expectant mother without an account? </span>
-                  <button
-                    type="button"
-                    onClick={() => { setIsRegistering(true); setErrorMsg(''); setSuccessMsg(''); }}
-                    style={{ color: '#EA580C', fontWeight: 700, background: 'none', border: 'none', cursor: 'pointer' }}
-                  >
-                    Register Here
-                  </button>
-                </div>
-              )}
+              {/* Role-Specific Registration Links */}
+              <div style={{ textAlign: 'center', borderTop: '1px solid #F1F5F9', paddingTop: '1rem', fontSize: '0.82rem' }}>
+                {activeTab === 'doctor' && (
+                  <div>
+                    <span style={{ color: 'var(--text-secondary)' }}>New Doctor? </span>
+                    <button
+                      type="button"
+                      onClick={() => { setIsRegistering(true); setErrorMsg(''); setSuccessMsg(''); }}
+                      style={{ color: '#0284C7', fontWeight: 700, background: 'none', border: 'none', cursor: 'pointer' }}
+                    >
+                      Register here
+                    </button>
+                  </div>
+                )}
+
+                {activeTab === 'asha' && (
+                  <div>
+                    <span style={{ color: 'var(--text-secondary)' }}>New ASHA Worker? </span>
+                    <button
+                      type="button"
+                      onClick={() => { setIsRegistering(true); setErrorMsg(''); setSuccessMsg(''); }}
+                      style={{ color: 'var(--teal-primary)', fontWeight: 700, background: 'none', border: 'none', cursor: 'pointer' }}
+                    >
+                      Register here
+                    </button>
+                  </div>
+                )}
+
+                {activeTab === 'mother' && (
+                  <div>
+                    <span style={{ color: 'var(--text-secondary)' }}>New Mother? </span>
+                    <button
+                      type="button"
+                      onClick={() => { setIsRegistering(true); setErrorMsg(''); setSuccessMsg(''); }}
+                      style={{ color: '#EA580C', fontWeight: 700, background: 'none', border: 'none', cursor: 'pointer' }}
+                    >
+                      Register here
+                    </button>
+                  </div>
+                )}
+              </div>
 
             </form>
           )}
@@ -706,4 +993,3 @@ export const AuthModal: React.FC = () => {
     </div>
   );
 };
-

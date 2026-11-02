@@ -25,6 +25,8 @@ export type RecordStatus =
   | 'Pending synchronisation' 
   | 'Synchronised';
 
+export type AccountStatus = 'active' | 'pending_approval' | 'rejected' | 'suspended';
+
 export interface User {
   id: string;
   name: string;
@@ -38,6 +40,15 @@ export interface User {
   selectedState?: string;
   selectedDistrict?: string;
   languageOnboardingCompleted?: boolean;
+  accountStatus?: AccountStatus;
+  medicalRegNo?: string;          // Doctor specific
+  hospitalAffiliation?: string;   // Doctor specific
+  ashaWorkerId?: string;          // ASHA specific
+  assignedVillage?: string;       // ASHA specific
+  associatedPhc?: string;         // Doctor or ASHA
+  registrationDate?: string;
+  verifiedAt?: string;
+  verifiedBy?: string;
 }
 
 export interface Mother {

@@ -1,5 +1,5 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { User, UserRole } from '../types';
+import { User, UserRole, AccountStatus } from '../types';
 
 export interface AuthSession {
   token: string;
@@ -20,6 +20,25 @@ export interface RegisterPatientInput {
   husbandName?: string;
 }
 
+export interface RegisterDoctorInput {
+  fullName: string;
+  email: string;
+  phone: string;
+  medicalRegNo: string;
+  hospitalAffiliation: string;
+  password: string;
+}
+
+export interface RegisterAshaInput {
+  fullName: string;
+  email: string;
+  phone: string;
+  ashaWorkerId?: string;
+  assignedVillage: string;
+  associatedPhc: string;
+  password: string;
+}
+
 interface StoredAccount {
   id: string;
   email: string;
@@ -30,8 +49,16 @@ interface StoredAccount {
   designation: string;
   location: string;
   phone: string;
+  accountStatus: AccountStatus;
   motherProfileId?: string;
+  medicalRegNo?: string;
+  hospitalAffiliation?: string;
+  ashaWorkerId?: string;
+  assignedVillage?: string;
+  associatedPhc?: string;
   createdAt: string;
+  verifiedAt?: string;
+  verifiedBy?: string;
 }
 
 const STORAGE_KEY_SESSION = 'matru_netra_auth_session_v2';
@@ -69,7 +96,13 @@ async function initializeLocalAccounts(): Promise<StoredAccount[]> {
   const existing = localStorage.getItem(STORAGE_KEY_LOCAL_ACCOUNTS);
   if (existing) {
     try {
-      return JSON.parse(existing);
+      const parsed: StoredAccount[] = JSON.parse(existing);
+      // Ensure existing accounts have accountStatus defaulted to active
+      const migrated = parsed.map(acc => ({
+        ...acc,
+        accountStatus: acc.accountStatus || 'active'
+      }));
+      return migrated;
     } catch {
       // Re-initialize if corrupted
     }
@@ -95,7 +128,13 @@ async function initializeLocalAccounts(): Promise<StoredAccount[]> {
       designation: 'Medical Officer In-Charge',
       location: 'Primary Health Centre (PHC) Rampur',
       phone: '+91 98765-11223',
-      createdAt: new Date().toISOString()
+      accountStatus: 'active',
+      medicalRegNo: 'MCI-WB-48291',
+      hospitalAffiliation: 'PHC Rampur',
+      associatedPhc: 'PHC Rampur',
+      createdAt: new Date().toISOString(),
+      verifiedAt: new Date().toISOString(),
+      verifiedBy: 'State Health Mission West Bengal'
     },
     {
       id: 'usr_asha_kalyanpur_01',
@@ -107,7 +146,13 @@ async function initializeLocalAccounts(): Promise<StoredAccount[]> {
       designation: 'ASHA Facilitator',
       location: 'Sub-Centre Kalyanpur, PHC Rampur',
       phone: '+91 98765-43210',
-      createdAt: new Date().toISOString()
+      accountStatus: 'active',
+      ashaWorkerId: 'ASHA-WB-2041',
+      assignedVillage: 'Kalyanpur',
+      associatedPhc: 'PHC Rampur',
+      createdAt: new Date().toISOString(),
+      verifiedAt: new Date().toISOString(),
+      verifiedBy: 'Dr. Priya Sharma (MOIC Rampur)'
     },
     {
       id: 'usr_mom_sunita_01',
@@ -119,6 +164,7 @@ async function initializeLocalAccounts(): Promise<StoredAccount[]> {
       designation: 'Beneficiary Mother (28 Weeks Pregnant)',
       location: 'Village Kalyanpur, Block Rampur',
       phone: '+91 98765-88990',
+      accountStatus: 'active',
       motherProfileId: 'MOM-001',
       createdAt: new Date().toISOString()
     }
@@ -190,7 +236,16 @@ export const authService = {
         designation: profile.designation || '',
         location: profile.location || '',
         phone: profile.phone,
-        avatar: profile.role === 'doctor' ? '🩺' : (profile.role === 'asha' ? '👩‍⚕️' : '🤰')
+        avatar: profile.role === 'doctor' ? '🩺' : (profile.role === 'asha' ? '👩‍⚕️' : '🤰'),
+        accountStatus: profile.account_status || 'active',
+        medicalRegNo: profile.medical_reg_no,
+        hospitalAffiliation: profile.hospital_affiliation,
+        ashaWorkerId: profile.asha_worker_id,
+        assignedVillage: profile.assigned_village,
+        associatedPhc: profile.assigned_phc || profile.hospital_affiliation,
+        registrationDate: profile.created_at,
+        verifiedAt: profile.verified_at,
+        verifiedBy: profile.verified_by
       };
 
       const session: AuthSession = {
@@ -238,7 +293,16 @@ export const authService = {
       location: account.location,
       phone: account.phone,
       avatar: account.role === 'doctor' ? '🩺' : (account.role === 'asha' ? '👩‍⚕️' : '🤰'),
-      motherProfileId: account.motherProfileId
+      motherProfileId: account.motherProfileId,
+      accountStatus: account.accountStatus || 'active',
+      medicalRegNo: account.medicalRegNo,
+      hospitalAffiliation: account.hospitalAffiliation,
+      ashaWorkerId: account.ashaWorkerId,
+      assignedVillage: account.assignedVillage,
+      associatedPhc: account.associatedPhc,
+      registrationDate: account.createdAt,
+      verifiedAt: account.verifiedAt,
+      verifiedBy: account.verifiedBy
     };
 
     const session: AuthSession = {
@@ -299,7 +363,8 @@ export const authService = {
         designation: 'Registered Mother',
         location: input.village.trim(),
         phone: input.phone.trim(),
-        avatar: '🤰'
+        avatar: '🤰',
+        accountStatus: 'active'
       };
 
       const session: AuthSession = {
@@ -335,6 +400,7 @@ export const authService = {
       designation: `Beneficiary Mother (${input.gestationalWeeks || 12} Weeks Expecting)`,
       location: input.village.trim() || 'Village Rampur',
       phone: input.phone.trim(),
+      accountStatus: 'active',
       motherProfileId: newMotherProfileId,
       createdAt: new Date().toISOString()
     };
@@ -350,6 +416,7 @@ export const authService = {
       location: newAccount.location,
       phone: newAccount.phone,
       avatar: '🤰',
+      accountStatus: 'active',
       motherProfileId: newMotherProfileId
     };
 
@@ -362,6 +429,348 @@ export const authService = {
 
     localStorage.setItem(STORAGE_KEY_SESSION, JSON.stringify(session));
     return { user: userObj, session };
+  },
+
+  /**
+   * Register a new Doctor / Medical Officer account
+   * Creates an account with pending-verification status.
+   */
+  async registerDoctor(input: RegisterDoctorInput): Promise<{ user: User; session: AuthSession; message: string }> {
+    const trimmedEmail = input.email.trim().toLowerCase();
+    const trimmedPassword = input.password.trim();
+    const trimmedName = input.fullName.trim();
+    const trimmedPhone = input.phone.trim();
+    const trimmedRegNo = input.medicalRegNo.trim();
+    const trimmedFacility = input.hospitalAffiliation.trim();
+
+    if (!trimmedName) throw new Error('Please enter your full name.');
+    if (!trimmedEmail || !trimmedEmail.includes('@')) throw new Error('Please enter a valid email address.');
+    if (!trimmedPhone || trimmedPhone.replace(/\D/g, '').length < 10) throw new Error('Please enter a valid 10-digit mobile number.');
+    if (!trimmedRegNo) throw new Error('Please enter your Medical Registration Number (State/National Council).');
+    if (!trimmedFacility) throw new Error('Please enter your assigned Healthcare Facility / PHC.');
+    if (trimmedPassword.length < 6) throw new Error('Password must be at least 6 characters in length.');
+
+    const message = `Doctor registration submitted successfully! Your credentials (Medical Reg No: ${trimmedRegNo}) are pending administrative verification by the PHC Medical Superintendent before patient records can be accessed.`;
+
+    // 1. SUPABASE CLOUD REGISTRATION
+    if (isSupabaseConfigured() && supabase) {
+      const { data, error } = await supabase.auth.signUp({
+        email: trimmedEmail,
+        password: trimmedPassword,
+        options: {
+          data: {
+            role: 'doctor',
+            full_name: trimmedName,
+            phone: trimmedPhone,
+            medical_reg_no: trimmedRegNo,
+            hospital_affiliation: trimmedFacility,
+            account_status: 'pending_approval'
+          }
+        }
+      });
+
+      if (error || !data.user) {
+        throw new Error(error?.message || 'Failed to submit doctor registration.');
+      }
+
+      const userObj: User = {
+        id: data.user.id,
+        name: trimmedName.startsWith('Dr.') ? trimmedName : `Dr. ${trimmedName}`,
+        role: 'doctor',
+        designation: 'Medical Officer (Verification Pending)',
+        location: trimmedFacility,
+        phone: trimmedPhone,
+        avatar: '🩺',
+        accountStatus: 'pending_approval',
+        medicalRegNo: trimmedRegNo,
+        hospitalAffiliation: trimmedFacility,
+        associatedPhc: trimmedFacility,
+        registrationDate: new Date().toISOString()
+      };
+
+      const session: AuthSession = {
+        token: data.session?.access_token || generateRandomHex(32),
+        user: userObj,
+        role: 'doctor',
+        expiresAt: Date.now() + SESSION_DURATION_MS
+      };
+
+      localStorage.setItem(STORAGE_KEY_SESSION, JSON.stringify(session));
+      return { user: userObj, session, message };
+    }
+
+    // 2. LOCAL SECURE CRYPTOGRAPHIC REGISTRATION
+    const accounts = await initializeLocalAccounts();
+    const exists = accounts.some(acc => acc.email.toLowerCase() === trimmedEmail);
+    if (exists) {
+      throw new Error('An account with this email address is already registered. Please sign in instead.');
+    }
+
+    const salt = generateRandomHex(16);
+    const passwordHash = await hashPassword(trimmedPassword, salt);
+    const newUserId = 'usr_doc_' + generateRandomHex(8);
+
+    const newAccount: StoredAccount = {
+      id: newUserId,
+      email: trimmedEmail,
+      passwordHash,
+      salt,
+      role: 'doctor',
+      fullName: trimmedName.startsWith('Dr.') ? trimmedName : `Dr. ${trimmedName}`,
+      designation: 'Medical Officer (Verification Pending)',
+      location: trimmedFacility,
+      phone: trimmedPhone,
+      accountStatus: 'pending_approval',
+      medicalRegNo: trimmedRegNo,
+      hospitalAffiliation: trimmedFacility,
+      associatedPhc: trimmedFacility,
+      createdAt: new Date().toISOString()
+    };
+
+    accounts.push(newAccount);
+    localStorage.setItem(STORAGE_KEY_LOCAL_ACCOUNTS, JSON.stringify(accounts));
+
+    const userObj: User = {
+      id: newUserId,
+      name: newAccount.fullName,
+      role: 'doctor',
+      designation: newAccount.designation,
+      location: newAccount.location,
+      phone: newAccount.phone,
+      avatar: '🩺',
+      accountStatus: 'pending_approval',
+      medicalRegNo: trimmedRegNo,
+      hospitalAffiliation: trimmedFacility,
+      associatedPhc: trimmedFacility,
+      registrationDate: newAccount.createdAt
+    };
+
+    const session: AuthSession = {
+      token: generateRandomHex(32),
+      user: userObj,
+      role: 'doctor',
+      expiresAt: Date.now() + SESSION_DURATION_MS
+    };
+
+    localStorage.setItem(STORAGE_KEY_SESSION, JSON.stringify(session));
+    return { user: userObj, session, message };
+  },
+
+  /**
+   * Register a new ASHA Worker account
+   * Creates an account with pending-verification status.
+   */
+  async registerAsha(input: RegisterAshaInput): Promise<{ user: User; session: AuthSession; message: string }> {
+    const trimmedEmail = input.email.trim().toLowerCase();
+    const trimmedPassword = input.password.trim();
+    const trimmedName = input.fullName.trim();
+    const trimmedPhone = input.phone.trim();
+    const trimmedVillage = input.assignedVillage.trim();
+    const trimmedPhc = input.associatedPhc.trim();
+    const trimmedId = (input.ashaWorkerId || '').trim();
+
+    if (!trimmedName) throw new Error('Please enter your full name.');
+    if (!trimmedEmail || !trimmedEmail.includes('@')) throw new Error('Please enter a valid email address.');
+    if (!trimmedPhone || trimmedPhone.replace(/\D/g, '').length < 10) throw new Error('Please enter a valid 10-digit mobile number.');
+    if (!trimmedVillage) throw new Error('Please enter your assigned Village / Area.');
+    if (!trimmedPhc) throw new Error('Please enter your associated PHC / Health Sub-Centre.');
+    if (trimmedPassword.length < 6) throw new Error('Password must be at least 6 characters in length.');
+
+    const message = `ASHA Worker registration submitted successfully! Your account is pending Sub-Centre jurisdiction verification by the PHC Medical Officer before field records can be accessed.`;
+
+    // 1. SUPABASE CLOUD REGISTRATION
+    if (isSupabaseConfigured() && supabase) {
+      const { data, error } = await supabase.auth.signUp({
+        email: trimmedEmail,
+        password: trimmedPassword,
+        options: {
+          data: {
+            role: 'asha',
+            full_name: trimmedName,
+            phone: trimmedPhone,
+            asha_worker_id: trimmedId || 'PENDING',
+            assigned_village: trimmedVillage,
+            associated_phc: trimmedPhc,
+            account_status: 'pending_approval'
+          }
+        }
+      });
+
+      if (error || !data.user) {
+        throw new Error(error?.message || 'Failed to submit ASHA registration.');
+      }
+
+      const userObj: User = {
+        id: data.user.id,
+        name: trimmedName,
+        role: 'asha',
+        designation: 'ASHA Field Worker (Verification Pending)',
+        location: `${trimmedVillage}, ${trimmedPhc}`,
+        phone: trimmedPhone,
+        avatar: '👩‍⚕️',
+        accountStatus: 'pending_approval',
+        ashaWorkerId: trimmedId || undefined,
+        assignedVillage: trimmedVillage,
+        associatedPhc: trimmedPhc,
+        registrationDate: new Date().toISOString()
+      };
+
+      const session: AuthSession = {
+        token: data.session?.access_token || generateRandomHex(32),
+        user: userObj,
+        role: 'asha',
+        expiresAt: Date.now() + SESSION_DURATION_MS
+      };
+
+      localStorage.setItem(STORAGE_KEY_SESSION, JSON.stringify(session));
+      return { user: userObj, session, message };
+    }
+
+    // 2. LOCAL SECURE CRYPTOGRAPHIC REGISTRATION
+    const accounts = await initializeLocalAccounts();
+    const exists = accounts.some(acc => acc.email.toLowerCase() === trimmedEmail);
+    if (exists) {
+      throw new Error('An account with this email address is already registered. Please sign in instead.');
+    }
+
+    const salt = generateRandomHex(16);
+    const passwordHash = await hashPassword(trimmedPassword, salt);
+    const newUserId = 'usr_asha_' + generateRandomHex(8);
+
+    const newAccount: StoredAccount = {
+      id: newUserId,
+      email: trimmedEmail,
+      passwordHash,
+      salt,
+      role: 'asha',
+      fullName: trimmedName,
+      designation: 'ASHA Field Worker (Verification Pending)',
+      location: `${trimmedVillage}, ${trimmedPhc}`,
+      phone: trimmedPhone,
+      accountStatus: 'pending_approval',
+      ashaWorkerId: trimmedId || `ASHA-PENDING-${Math.floor(1000 + Math.random() * 9000)}`,
+      assignedVillage: trimmedVillage,
+      associatedPhc: trimmedPhc,
+      createdAt: new Date().toISOString()
+    };
+
+    accounts.push(newAccount);
+    localStorage.setItem(STORAGE_KEY_LOCAL_ACCOUNTS, JSON.stringify(accounts));
+
+    const userObj: User = {
+      id: newUserId,
+      name: newAccount.fullName,
+      role: 'asha',
+      designation: newAccount.designation,
+      location: newAccount.location,
+      phone: newAccount.phone,
+      avatar: '👩‍⚕️',
+      accountStatus: 'pending_approval',
+      ashaWorkerId: newAccount.ashaWorkerId,
+      assignedVillage: trimmedVillage,
+      associatedPhc: trimmedPhc,
+      registrationDate: newAccount.createdAt
+    };
+
+    const session: AuthSession = {
+      token: generateRandomHex(32),
+      user: userObj,
+      role: 'asha',
+      expiresAt: Date.now() + SESSION_DURATION_MS
+    };
+
+    localStorage.setItem(STORAGE_KEY_SESSION, JSON.stringify(session));
+    return { user: userObj, session, message };
+  },
+
+  /**
+   * Retrieve list of accounts pending institutional verification
+   */
+  async getPendingAccounts(): Promise<User[]> {
+    const accounts = await initializeLocalAccounts();
+    return accounts
+      .filter(acc => acc.accountStatus === 'pending_approval')
+      .map(acc => ({
+        id: acc.id,
+        name: acc.fullName,
+        role: acc.role,
+        designation: acc.designation,
+        location: acc.location,
+        phone: acc.phone,
+        avatar: acc.role === 'doctor' ? '🩺' : '👩‍⚕️',
+        accountStatus: acc.accountStatus,
+        medicalRegNo: acc.medicalRegNo,
+        hospitalAffiliation: acc.hospitalAffiliation,
+        ashaWorkerId: acc.ashaWorkerId,
+        assignedVillage: acc.assignedVillage,
+        associatedPhc: acc.associatedPhc,
+        registrationDate: acc.createdAt
+      }));
+  },
+
+  /**
+   * Institutional approval workflow: Authorize a pending Doctor or ASHA account
+   */
+  async approveAccount(accountId: string, approvedBy: string): Promise<User> {
+    const accounts = await initializeLocalAccounts();
+    const idx = accounts.findIndex(acc => acc.id === accountId);
+    if (idx === -1) {
+      throw new Error('Account record not found.');
+    }
+
+    const target = accounts[idx];
+    target.accountStatus = 'active';
+    target.verifiedAt = new Date().toISOString();
+    target.verifiedBy = approvedBy;
+    if (target.role === 'doctor') {
+      target.designation = 'Verified Medical Officer';
+    } else if (target.role === 'asha') {
+      target.designation = 'Accredited ASHA Field Worker';
+    }
+
+    accounts[idx] = target;
+    localStorage.setItem(STORAGE_KEY_LOCAL_ACCOUNTS, JSON.stringify(accounts));
+
+    // If current session belongs to this user, update session as well
+    const currentSession = await this.getCurrentSession();
+    if (currentSession && currentSession.user.id === accountId) {
+      currentSession.user.accountStatus = 'active';
+      currentSession.user.designation = target.designation;
+      currentSession.user.verifiedAt = target.verifiedAt;
+      currentSession.user.verifiedBy = target.verifiedBy;
+      localStorage.setItem(STORAGE_KEY_SESSION, JSON.stringify(currentSession));
+    }
+
+    return {
+      id: target.id,
+      name: target.fullName,
+      role: target.role,
+      designation: target.designation,
+      location: target.location,
+      phone: target.phone,
+      avatar: target.role === 'doctor' ? '🩺' : '👩‍⚕️',
+      accountStatus: 'active',
+      medicalRegNo: target.medicalRegNo,
+      hospitalAffiliation: target.hospitalAffiliation,
+      ashaWorkerId: target.ashaWorkerId,
+      assignedVillage: target.assignedVillage,
+      associatedPhc: target.associatedPhc,
+      registrationDate: target.createdAt,
+      verifiedAt: target.verifiedAt,
+      verifiedBy: target.verifiedBy
+    };
+  },
+
+  /**
+   * Institutional rejection workflow
+   */
+  async rejectAccount(accountId: string): Promise<void> {
+    const accounts = await initializeLocalAccounts();
+    const idx = accounts.findIndex(acc => acc.id === accountId);
+    if (idx !== -1) {
+      accounts[idx].accountStatus = 'rejected';
+      localStorage.setItem(STORAGE_KEY_LOCAL_ACCOUNTS, JSON.stringify(accounts));
+    }
   },
 
   /**

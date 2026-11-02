@@ -6,6 +6,7 @@ import { AshaDashboard } from './components/dashboards/AshaDashboard';
 import { DoctorDashboard } from './components/dashboards/DoctorDashboard';
 import { MotherDashboard } from './components/dashboards/MotherDashboard';
 import { AuthModal } from './components/auth/AuthModal';
+import { PendingVerificationView } from './components/auth/PendingVerificationView';
 import { RegionLanguageModal } from './components/onboarding/RegionLanguageModal';
 import { ShieldAlert, ArrowRight } from 'lucide-react';
 
@@ -43,30 +44,34 @@ const MainAppContent: React.FC = () => {
         ) : (
           /* Protected Portal Area: strictly verified against currentUser.role */
           currentUser ? (
-            <>
-              {currentRole === 'asha' && currentUser.role === 'asha' && <AshaDashboard />}
-              {currentRole === 'doctor' && currentUser.role === 'doctor' && <DoctorDashboard />}
-              {currentRole === 'mother' && currentUser.role === 'mother' && <MotherDashboard />}
+            currentUser.accountStatus === 'pending_approval' ? (
+              <PendingVerificationView />
+            ) : (
+              <>
+                {currentRole === 'asha' && currentUser.role === 'asha' && <AshaDashboard />}
+                {currentRole === 'doctor' && currentUser.role === 'doctor' && <DoctorDashboard />}
+                {currentRole === 'mother' && currentUser.role === 'mother' && <MotherDashboard />}
 
-              {/* Guard against mismatched state */}
-              {currentRole !== currentUser.role && (
-                <div style={{ padding: '6rem 1.5rem', textAlign: 'center' }}>
-                  <div style={{ maxWidth: '520px', margin: '0 auto', background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: 'var(--radius-xl)', padding: '2.5rem' }}>
-                    <ShieldAlert size={48} color="#DC2626" style={{ margin: '0 auto 1rem' }} />
-                    <h2 style={{ fontSize: '1.4rem', color: '#991B1B', marginBottom: '0.75rem' }}>Access Restricted</h2>
-                    <p style={{ color: '#7F1D1D', fontSize: '0.92rem', marginBottom: '1.5rem' }}>
-                      Your authenticated account does not have permission to access this clinical view.
-                    </p>
-                    <button
-                      onClick={() => setActiveView('landing')}
-                      className="btn btn-primary"
-                    >
-                      Return to Safe Home
-                    </button>
+                {/* Guard against mismatched state */}
+                {currentRole !== currentUser.role && (
+                  <div style={{ padding: '6rem 1.5rem', textAlign: 'center' }}>
+                    <div style={{ maxWidth: '520px', margin: '0 auto', background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: 'var(--radius-xl)', padding: '2.5rem' }}>
+                      <ShieldAlert size={48} color="#DC2626" style={{ margin: '0 auto 1rem' }} />
+                      <h2 style={{ fontSize: '1.4rem', color: '#991B1B', marginBottom: '0.75rem' }}>Access Restricted</h2>
+                      <p style={{ color: '#7F1D1D', fontSize: '0.92rem', marginBottom: '1.5rem' }}>
+                        Your authenticated account does not have permission to access this clinical view.
+                      </p>
+                      <button
+                        onClick={() => setActiveView('landing')}
+                        className="btn btn-primary"
+                      >
+                        Return to Safe Home
+                      </button>
+                    </div>
                   </div>
-                </div>
-              )}
-            </>
+                )}
+              </>
+            )
           ) : (
             /* Unauthenticated fallback banner */
             <div style={{ padding: '6rem 1.5rem', textAlign: 'center' }}>

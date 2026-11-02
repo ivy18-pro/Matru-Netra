@@ -133,9 +133,9 @@ export const Navbar: React.FC = () => {
             >
               <LayoutDashboard size={16} />
               <span>
-                {currentRole === 'doctor' && 'Doctor Station'}
-                {currentRole === 'asha' && 'ASHA Field Workspace'}
-                {currentRole === 'mother' && 'My Care Portal'}
+                {currentUser.accountStatus === 'pending_approval' 
+                  ? 'Verification Status' 
+                  : (currentRole === 'doctor' ? 'Doctor Station' : (currentRole === 'asha' ? 'ASHA Field Workspace' : 'My Care Portal'))}
               </span>
             </button>
           )}
@@ -369,13 +369,13 @@ export const Navbar: React.FC = () => {
                     fontSize: '0.68rem',
                     padding: '0.15rem 0.45rem',
                     borderRadius: 'var(--radius-full)',
-                    background: currentRole === 'doctor' ? '#0284C7' : (currentRole === 'asha' ? 'var(--teal-primary)' : '#EA580C'),
+                    background: currentUser.accountStatus === 'pending_approval' ? '#D97706' : (currentRole === 'doctor' ? '#0284C7' : (currentRole === 'asha' ? 'var(--teal-primary)' : '#EA580C')),
                     color: '#FFFFFF',
                     textTransform: 'uppercase',
                     fontWeight: 800
                   }}
                 >
-                  {currentRole}
+                  {currentUser.accountStatus === 'pending_approval' ? 'Pending Review' : currentRole}
                 </span>
                 <ChevronDown size={14} />
               </button>

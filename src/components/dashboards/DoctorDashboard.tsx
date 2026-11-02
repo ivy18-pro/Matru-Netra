@@ -19,7 +19,7 @@ import {
 import { DoctorReviewModal } from '../modals/DoctorReviewModal';
 
 export const DoctorDashboard: React.FC = () => {
-  const { mothers, visits, currentUser } = useCare();
+  const { mothers, visits, currentUser, pendingAccounts, approveAccount, rejectAccount } = useCare();
 
   const [selectedMotherId, setSelectedMotherId] = useState<string>('MOM-001');
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
@@ -114,6 +114,103 @@ export const DoctorDashboard: React.FC = () => {
           </div>
 
         </div>
+
+        {/* Institutional Credential Review Panel: Pending Doctor and ASHA registrations */}
+        {pendingAccounts && pendingAccounts.length > 0 && (
+          <div style={{
+            background: '#FFFFFF',
+            border: '1.5px solid #F59E0B',
+            borderRadius: 'var(--radius-xl)',
+            padding: '1.5rem',
+            marginBottom: '2rem',
+            boxShadow: 'var(--shadow-md)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1rem', borderBottom: '1px solid #FEF3C7', paddingBottom: '0.75rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <Clock size={20} color="#D97706" />
+                <h3 style={{ margin: 0, fontSize: '1.15rem', color: '#92400E' }}>
+                  Institutional Staff Credential Review ({pendingAccounts.length} Pending Approval)
+                </h3>
+              </div>
+              <span className="badge badge-warning" style={{ background: '#FEF3C7', color: '#92400E' }}>
+                MOIC Administrative Authority
+              </span>
+            </div>
+
+            <p style={{ margin: '0 0 1rem 0', fontSize: '0.84rem', color: 'var(--text-secondary)' }}>
+              The following healthcare professionals have registered and require verification by the PHC Medical Officer In-Charge before receiving access to clinical records:
+            </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+              {pendingAccounts.map((applicant) => (
+                <div
+                  key={applicant.id}
+                  style={{
+                    background: '#FFFDF5',
+                    border: '1px solid #FDE68A',
+                    borderRadius: 'var(--radius-lg)',
+                    padding: '1rem 1.25rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    flexWrap: 'wrap',
+                    gap: '1rem'
+                  }}
+                >
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                      <span style={{ fontWeight: 800, fontSize: '1rem', color: 'var(--navy-deep)' }}>
+                        {applicant.name}
+                      </span>
+                      <span style={{
+                        padding: '0.15rem 0.5rem',
+                        borderRadius: 'var(--radius-full)',
+                        fontSize: '0.7rem',
+                        fontWeight: 800,
+                        textTransform: 'uppercase',
+                        background: applicant.role === 'doctor' ? '#E0F2FE' : '#CCFBF1',
+                        color: applicant.role === 'doctor' ? '#0369A1' : '#0F766E'
+                      }}>
+                        {applicant.role === 'doctor' ? 'Doctor' : 'ASHA Worker'}
+                      </span>
+                    </div>
+
+                    <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                      {applicant.role === 'doctor' && (
+                        <span>Medical Reg No: <strong>{applicant.medicalRegNo || 'MCI-PENDING'}</strong></span>
+                      )}
+                      {applicant.role === 'asha' && (
+                        <span>ASHA ID: <strong>{applicant.ashaWorkerId || 'PENDING'}</strong></span>
+                      )}
+                      <span>Facility: <strong>{applicant.hospitalAffiliation || applicant.associatedPhc || applicant.location}</strong></span>
+                      {applicant.assignedVillage && (
+                        <span>Village: <strong>{applicant.assignedVillage}</strong></span>
+                      )}
+                      <span>Phone: <strong>{applicant.phone}</strong></span>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <button
+                      onClick={() => approveAccount(applicant.id)}
+                      className="btn btn-primary btn-sm"
+                      style={{ padding: '0.45rem 0.85rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                    >
+                      <CheckCircle2 size={14} /> Verify & Approve
+                    </button>
+                    <button
+                      onClick={() => rejectAccount(applicant.id)}
+                      className="btn btn-outline btn-sm"
+                      style={{ padding: '0.45rem 0.75rem', fontSize: '0.8rem', color: '#DC2626', borderColor: '#FCA5A5' }}
+                    >
+                      Reject
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Main Content Layout: Left Triage Queue + Right Clinical Record & Trends */}
         <div style={{ display: 'grid', gridTemplateColumns: '1.25fr 1.75fr', gap: '2rem', alignItems: 'start' }}>

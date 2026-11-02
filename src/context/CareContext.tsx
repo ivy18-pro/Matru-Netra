@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { User, UserRole, Mother, VisitRecord, Milestone, OfflineQueueItem, Language } from '../types';
 import { INITIAL_MOTHERS, INITIAL_VISITS, SUNITA_MILESTONES } from '../data/mockData';
-import { authService, RegisterPatientInput } from '../services/authService';
+import { authService, RegisterPatientInput, RegisterDoctorInput, RegisterAshaInput } from '../services/authService';
 
 interface CareContextType {
   currentUser: User | null;
@@ -22,10 +22,16 @@ interface CareContextType {
   selectedMotherId: string | null;
   loginModalOpen: boolean;
   authModalDefaultRole: UserRole;
+  pendingAccounts: User[];
   
   // Real Authentication & Session Actions
   loginWithCredentials: (email: string, password: string, intendedRole: UserRole) => Promise<void>;
   registerMotherPatient: (input: RegisterPatientInput) => Promise<void>;
+  registerDoctor: (input: RegisterDoctorInput) => Promise<string>;
+  registerAsha: (input: RegisterAshaInput) => Promise<string>;
+  approveAccount: (accountId: string) => Promise<void>;
+  rejectAccount: (accountId: string) => Promise<void>;
+  refreshPendingAccounts: () => Promise<void>;
   logout: () => Promise<void>;
   openLoginForRole: (role: UserRole) => void;
   requestPasswordReset: (email: string) => Promise<string>;
@@ -117,6 +123,7 @@ export const CareProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [activeView, setActiveView] = useState<'landing' | 'portal'>('landing');
   const [authModalDefaultRole, setAuthModalDefaultRole] = useState<UserRole>('asha');
   const [loginModalOpen, setLoginModalOpen] = useState<boolean>(false);
+  const [pendingAccounts, setPendingAccounts] = useState<User[]>([]);
 
   // Field & Clinical states
   const [isOffline, setIsOffline] = useState<boolean>(false);
@@ -394,6 +401,73 @@ export const CareProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   /**
+   * Real Doctor Registration: Registers a new Medical Officer
+   * Account starts in pending_approval status awaiting administrative verification.
+   */
+  const registerDoctor = async (input: RegisterDoctorInput): Promise<string> => {
+    const { user, message } = await authService.registerDoctor(input);
+    setCurrentUser(user);
+    setCurrentRole('doctor');
+    setActiveView('portal');
+    setLoginModalOpen(false);
+    await refreshPendingAccounts();
+    return message;
+  };
+
+  /**
+   * Real ASHA Worker Registration: Registers a frontline health worker
+   * Account starts in pending_approval status awaiting Sub-Centre / PHC verification.
+   */
+  const registerAsha = async (input: RegisterAshaInput): Promise<string> => {
+    const { user, message } = await authService.registerAsha(input);
+    setCurrentUser(user);
+    setCurrentRole('asha');
+    setActiveView('portal');
+    setLoginModalOpen(false);
+    await refreshPendingAccounts();
+    return message;
+  };
+
+  /**
+   * Fetch all accounts awaiting institutional verification
+   */
+  const refreshPendingAccounts = async () => {
+    try {
+      const list = await authService.getPendingAccounts();
+      setPendingAccounts(list);
+    } catch (e) {
+      console.warn('Could not refresh pending accounts:', e);
+    }
+  };
+
+  /**
+   * Administrative Approval Workflow
+   */
+  const approveAccount = async (accountId: string): Promise<void> => {
+    const approver = currentUser?.name || 'Dr. Priya Sharma (Medical Officer In-Charge)';
+    const updatedUser = await authService.approveAccount(accountId, approver);
+    if (currentUser?.id === accountId) {
+      setCurrentUser(updatedUser);
+    }
+    await refreshPendingAccounts();
+  };
+
+  /**
+   * Administrative Rejection Workflow
+   */
+  const rejectAccount = async (accountId: string): Promise<void> => {
+    await authService.rejectAccount(accountId);
+    if (currentUser?.id === accountId) {
+      await logout();
+    }
+    await refreshPendingAccounts();
+  };
+
+  useEffect(() => {
+    refreshPendingAccounts();
+  }, [currentUser]);
+
+  /**
    * Real Sign Out: Clears active session and revokes access to clinical dashboards
    */
   const logout = async () => {
@@ -664,8 +738,14 @@ export const CareProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         selectedMotherId,
         loginModalOpen,
         authModalDefaultRole,
+        pendingAccounts,
         loginWithCredentials,
         registerMotherPatient,
+        registerDoctor,
+        registerAsha,
+        approveAccount,
+        rejectAccount,
+        refreshPendingAccounts,
         logout,
         openLoginForRole,
         requestPasswordReset,

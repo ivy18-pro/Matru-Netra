@@ -1,0 +1,13 @@
+{
+  "name": "MATRU-NETRA — Maternal Care Net-Grid",
+  "short_name": "MATRU-NETRA",
+  "description": "Offline-first maternal and newborn care coordination for rural India.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0B1E36",
+  "theme_color": "#0B1E36",
+  "icons": [
+    { "src": "favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

@@ -5,7 +5,8 @@ import {
   INDIA_STATES_DATA, 
   RegionState, 
   getSuggestedLanguagesForRegion, 
-  searchStatesAndDistricts 
+  searchStatesAndDistricts,
+  getDistrictCoords
 } from '../../data/indiaGeoData';
 import { t, SUPPORTED_LANGUAGES } from '../../i18n/translations';
 import { voiceService } from '../../services/voiceService';
@@ -72,6 +73,7 @@ export const RegionLanguageModal: React.FC<RegionLanguageModalProps> = ({
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const polygonLayersRef = useRef<{ [key: string]: L.Polygon }>({});
+  const districtMarkerRef = useRef<L.CircleMarker | null>(null);
 
   // Initialize or update Leaflet Map
   useEffect(() => {
@@ -224,7 +226,40 @@ export const RegionLanguageModal: React.FC<RegionLanguageModalProps> = ({
     });
   }, [selectedState]);
 
+  // Show a marker on the map for the currently selected district
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    if (districtMarkerRef.current) {
+      districtMarkerRef.current.remove();
+      districtMarkerRef.current = null;
+    }
+
+    const coords = getDistrictCoords(selectedDistrict);
+    if (!coords) return;
+
+    districtMarkerRef.current = L.circleMarker(coords, {
+      radius: 9,
+      color: '#FFFFFF',
+      weight: 3,
+      fillColor: '#EA580C',
+      fillOpacity: 1
+    })
+      .bindTooltip(selectedDistrict, { permanent: true, direction: 'top', offset: [0, -8] })
+      .addTo(map);
+  }, [selectedDistrict, selectedState, isOpen, step, activeTab]);
+
   if (!isOpen) return null;
+
+  // When a district is picked from the dropdown, fly the map to it
+  const handleDistrictChange = (district: string) => {
+    setSelectedDistrict(district);
+    const coords = getDistrictCoords(district);
+    if (coords && mapInstanceRef.current) {
+      mapInstanceRef.current.flyTo(coords, 10, { duration: 0.9 });
+    }
+  };
 
   const handleSelectState = (st: RegionState) => {
     setSelectedState(st);
@@ -527,7 +562,7 @@ export const RegionLanguageModal: React.FC<RegionLanguageModalProps> = ({
                     </label>
                     <select
                       value={selectedDistrict}
-                      onChange={(e) => setSelectedDistrict(e.target.value)}
+                      onChange={(e) => handleDistrictChange(e.target.value)}
                       style={{
                         width: '100%',
                         padding: '0.6rem 0.75rem',
@@ -889,3 +924,4 @@ export const RegionLanguageModal: React.FC<RegionLanguageModalProps> = ({
     </div>
   );
 };
+

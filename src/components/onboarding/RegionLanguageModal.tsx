@@ -91,20 +91,51 @@ export const RegionLanguageModal: React.FC<RegionLanguageModalProps> = ({
         center: [22.8, 81.0],
         zoom: 4.8,
         minZoom: 4,
-        maxZoom: 9,
+        maxZoom: 18, // Google-Maps-like deep zoom (street level)
         zoomControl: true,
         attributionControl: false
       });
 
-      // CartoDB Positron tiles for high-contrast, clean healthcare mapping
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+      // Keyless, Google-Maps-style basemaps (no API key needed).
+      // NOTE: CARTO basemaps now require an API key and show an
+      // "API KEY REQUIRED" watermark without one, so we use OSM + Esri instead.
+      const streetLayer = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
-        subdomains: 'abcd',
-      }).addTo(map);
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors'
+      });
+
+      const esriStreetLayer = L.tileLayer(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+        { maxZoom: 19, attribution: 'Tiles &copy; Esri' }
+      );
+
+      const satelliteLayer = L.tileLayer(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        { maxZoom: 19, attribution: 'Tiles &copy; Esri, Maxar, Earthstar Geographics' }
+      );
+
+      const placeLabelsLayer = L.tileLayer(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
+        { maxZoom: 19 }
+      );
+
+      // Default view = standard street map (like Google Maps)
+      streetLayer.addTo(map);
+
+      // Google-Maps-style layer switcher (Map / Satellite)
+      L.control.layers(
+        {
+          'Map': streetLayer,
+          'Map (Esri)': esriStreetLayer,
+          'Satellite': L.layerGroup([satelliteLayer, placeLabelsLayer])
+        },
+        undefined,
+        { position: 'topright', collapsed: true }
+      ).addTo(map);
 
       // Attribution banner
       L.control.attribution({ position: 'bottomright' })
-        .addAttribution('&copy; <a href="https://data.gov.in" target="_blank">Open Data India</a> &copy; Natural Earth')
+        .addAttribution('&copy; <a href="https://data.gov.in" target="_blank">Open Data India</a>')
         .addTo(map);
 
       polygonLayersRef.current = {};
@@ -117,7 +148,7 @@ export const RegionLanguageModal: React.FC<RegionLanguageModalProps> = ({
           color: isCurrentSelected ? '#EA580C' : '#0D9488',
           weight: isCurrentSelected ? 3 : 1.8,
           fillColor: isCurrentSelected ? '#F97316' : '#14B8A6',
-          fillOpacity: isCurrentSelected ? 0.45 : 0.22,
+          fillOpacity: isCurrentSelected ? 0.25 : 0.1,
           className: 'state-vector-polygon'
         }).addTo(map);
 
@@ -142,7 +173,7 @@ export const RegionLanguageModal: React.FC<RegionLanguageModalProps> = ({
         polygon.on('mouseout', () => {
           if (st.id !== selectedState.id) {
             polygon.setStyle({
-              fillOpacity: 0.22,
+              fillOpacity: 0.1,
               weight: 1.8,
               color: '#0D9488'
             });
@@ -187,7 +218,7 @@ export const RegionLanguageModal: React.FC<RegionLanguageModalProps> = ({
           color: isCurrent ? '#EA580C' : '#0D9488',
           weight: isCurrent ? 3.5 : 1.8,
           fillColor: isCurrent ? '#F97316' : '#14B8A6',
-          fillOpacity: isCurrent ? 0.45 : 0.22
+          fillOpacity: isCurrent ? 0.25 : 0.1
         });
       }
     });
@@ -858,4 +889,3 @@ export const RegionLanguageModal: React.FC<RegionLanguageModalProps> = ({
     </div>
   );
 };
-

@@ -589,3 +589,83 @@ export function searchStatesAndDistricts(query: string): { state: RegionState; m
   return results;
 }
 
+
+/**
+ * Approximate district headquarters coordinates [lat, lng] used so that
+ * picking a district in the dropdown can fly the map to that place.
+ */
+export const DISTRICT_COORDS: Record<string, [number, number]> = {
+  // West Bengal
+  'Nadia': [23.405, 88.49], 'Murshidabad': [24.1, 88.25], 'Birbhum': [23.905, 87.525],
+  'Bankura': [23.232, 87.065], 'Purulia': [23.332, 86.365], 'Bardhaman': [23.232, 87.861],
+  'Malda': [25.0, 88.14], 'South 24 Parganas': [22.19, 88.19], 'North 24 Parganas': [22.72, 88.48],
+  'Hooghly': [22.9, 88.39], 'Howrah': [22.59, 88.31], 'Darjeeling': [27.04, 88.26],
+  // Odisha
+  'Cuttack': [20.46, 85.88], 'Puri': [19.81, 85.83], 'Mayurbhanj': [21.93, 86.72],
+  'Balasore': [21.49, 86.93], 'Ganjam': [19.31, 84.79], 'Khordha': [20.3, 85.82],
+  'Sambalpur': [21.47, 83.97], 'Koraput': [18.81, 82.71], 'Sundargarh': [22.12, 84.04],
+  'Kalahandi': [19.91, 83.17], 'Bhadrak': [21.06, 86.52],
+  // Maharashtra
+  'Pune': [18.52, 73.86], 'Nashik': [20.0, 73.79], 'Thane': [19.22, 72.98], 'Nagpur': [21.15, 79.09],
+  'Aurangabad': [19.88, 75.34], 'Solapur': [17.66, 75.91], 'Kolhapur': [16.7, 74.24],
+  'Amravati': [20.93, 77.75], 'Nanded': [19.15, 77.32], 'Jalgaon': [21.01, 75.56],
+  'Satara': [17.69, 74.0], 'Ahmednagar': [19.1, 74.75],
+  // Tamil Nadu
+  'Madurai': [9.92, 78.12], 'Coimbatore': [11.02, 76.96], 'Tiruchirappalli': [10.79, 78.69],
+  'Salem': [11.66, 78.15], 'Tirunelveli': [8.73, 77.7], 'Thanjavur': [10.79, 79.14],
+  'Vellore': [12.92, 79.13], 'Kanchipuram': [12.83, 79.7], 'Dindigul': [10.37, 77.98],
+  'Erode': [11.34, 77.72], 'Cuddalore': [11.75, 79.77],
+  // Uttar Pradesh
+  'Varanasi': [25.32, 82.97], 'Gorakhpur': [26.76, 83.37], 'Rampur': [28.8, 79.03],
+  'Bareilly': [28.37, 79.43], 'Prayagraj': [25.44, 81.85], 'Lucknow': [26.85, 80.95],
+  'Kanpur': [26.45, 80.35], 'Agra': [27.18, 78.01], 'Aligarh': [27.88, 78.08],
+  'Meerut': [28.98, 77.71], 'Ayodhya': [26.8, 82.2], 'Jhansi': [25.45, 78.57],
+  // Bihar
+  'Patna': [25.59, 85.14], 'Gaya': [24.8, 85.0], 'Muzaffarpur': [26.12, 85.39],
+  'Bhagalpur': [25.24, 86.98], 'Darbhanga': [26.15, 85.9], 'Purnia': [25.78, 87.47],
+  'Samastipur': [25.86, 85.78], 'Begusarai': [25.42, 86.13], 'Madhubani': [26.35, 86.07],
+  'Rohtas': [24.95, 84.03],
+  // Assam
+  'Kamrup': [26.14, 91.74], 'Dibrugarh': [27.48, 94.91], 'Silchar (Cachar)': [24.83, 92.78],
+  'Jorhat': [26.75, 94.2], 'Nagaon': [26.35, 92.69], 'Sonitpur': [26.63, 92.8],
+  'Barpeta': [26.32, 91.0], 'Tinsukia': [27.49, 95.36], 'Golaghat': [26.52, 93.96],
+  // Gujarat
+  'Ahmedabad': [23.02, 72.57], 'Surat': [21.17, 72.83], 'Vadodara': [22.31, 73.18],
+  'Rajkot': [22.3, 70.8], 'Bhavnagar': [21.76, 72.15], 'Jamnagar': [22.47, 70.07],
+  'Junagadh': [21.52, 70.46], 'Kutch': [23.25, 69.67], 'Anand': [22.56, 72.95], 'Mehsana': [23.59, 72.37],
+  // Punjab
+  'Amritsar': [31.63, 74.87], 'Ludhiana': [30.9, 75.86], 'Jalandhar': [31.33, 75.58],
+  'Patiala': [30.34, 76.39], 'Bathinda': [30.21, 74.95], 'Hoshiarpur': [31.53, 75.91],
+  'Gurdaspur': [32.04, 75.41], 'Firozpur': [30.93, 74.61], 'Sangrur': [30.25, 75.84],
+  // Kerala
+  'Thiruvananthapuram': [8.52, 76.94], 'Kochi (Ernakulam)': [9.93, 76.27], 'Kozhikode': [11.26, 75.78],
+  'Thrissur': [10.53, 76.21], 'Malappuram': [11.07, 76.07], 'Palakkad': [10.78, 76.65],
+  'Kollam': [8.89, 76.61], 'Kannur': [11.87, 75.37], 'Alappuzha': [9.49, 76.33],
+  // Andhra Pradesh & Telangana
+  'Visakhapatnam': [17.69, 83.22], 'Vijayawada (Krishna)': [16.51, 80.65], 'Guntur': [16.31, 80.44],
+  'Tirupati': [13.63, 79.42], 'Kurnool': [15.83, 78.04], 'Hyderabad': [17.39, 78.49],
+  'Warangal': [17.97, 79.59], 'Khammam': [17.25, 80.15], 'Nizamabad': [18.67, 78.09],
+  // Rajasthan
+  'Jaipur': [26.91, 75.79], 'Jodhpur': [26.24, 73.02], 'Udaipur': [24.59, 73.71], 'Kota': [25.18, 75.84],
+  'Bikaner': [28.02, 73.31], 'Ajmer': [26.45, 74.64], 'Alwar': [27.56, 76.61],
+  'Bhilwara': [25.35, 74.64], 'Sikar': [27.61, 75.14],
+  // Madhya Pradesh
+  'Bhopal': [23.26, 77.41], 'Indore': [22.72, 75.86], 'Jabalpur': [23.18, 79.99], 'Gwalior': [26.22, 78.18],
+  'Ujjain': [23.18, 75.78], 'Sagar': [23.84, 78.74], 'Rewa': [24.53, 81.3], 'Satna': [24.6, 80.83],
+  'Ratlam': [23.33, 75.04],
+  // Jharkhand & Chhattisgarh
+  'Ranchi': [23.34, 85.31], 'Jamshedpur': [22.8, 86.2], 'Dhanbad': [23.8, 86.43], 'Bokaro': [23.67, 86.15],
+  'Raipur': [21.25, 81.63], 'Bilaspur': [22.08, 82.15], 'Durg': [21.19, 81.28], 'Bastar': [19.07, 82.03],
+  // Karnataka
+  'Bengaluru': [12.97, 77.59], 'Mysuru': [12.3, 76.64], 'Hubballi-Dharwad': [15.36, 75.12],
+  'Belagavi': [15.85, 74.5], 'Mangaluru': [12.91, 74.86], 'Kalaburagi': [17.33, 76.83],
+  'Ballari': [15.14, 76.92], 'Shivamogga': [13.93, 75.57],
+  // Delhi, Haryana & Himachal
+  'New Delhi': [28.61, 77.21], 'Gurugram': [28.46, 77.03], 'Faridabad': [28.41, 77.31],
+  'Shimla': [31.1, 77.17], 'Karnal': [29.69, 76.99], 'Ambala': [30.38, 76.78],
+  'Panipat': [29.39, 76.97], 'Dharamshala': [32.22, 76.32]
+};
+
+export function getDistrictCoords(district: string): [number, number] | undefined {
+  return DISTRICT_COORDS[district];
+}

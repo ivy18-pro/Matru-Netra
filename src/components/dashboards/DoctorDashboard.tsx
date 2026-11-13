@@ -16,10 +16,11 @@ import {
   Activity,
   Heart
 } from 'lucide-react';
+import SharedDataBadge from '../SharedDataBadge';
 import { DoctorReviewModal } from '../modals/DoctorReviewModal';
 
 export const DoctorDashboard: React.FC = () => {
-  const { mothers, visits, currentUser, pendingAccounts, approveAccount, rejectAccount } = useCare();
+  const { mothers, visits, currentUser, pendingAccounts, approveAccount, rejectAccount, dataMode } = useCare();
 
   const [selectedMotherId, setSelectedMotherId] = useState<string>('MOM-001');
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
@@ -41,6 +42,7 @@ export const DoctorDashboard: React.FC = () => {
   return (
     <div style={{ padding: '2rem 0', minHeight: 'calc(100vh - 70px)', background: 'var(--cream-bg)' }}>
       <div className="container">
+        <SharedDataBadge />
         
         {/* Top Header */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem', marginBottom: '2rem' }}>
@@ -54,7 +56,7 @@ export const DoctorDashboard: React.FC = () => {
               </span>
             </div>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginTop: '0.25rem' }}>
-              Clinician: <strong>{currentUser?.name || 'Dr. Priya Sharma, MBBS, DGO'}</strong> • Sector Coverage: 4 Sub-Centres (84 Mothers)
+              Clinician: <strong>{currentUser?.name || 'Dr. Priya Sharma, MBBS, DGO'}</strong> • {dataMode === 'cloud' ? `${mothers.length} registered mother${mothers.length === 1 ? '' : 's'} in the shared database` : 'Sector Coverage: 4 Sub-Centres (84 Mothers)'}
             </p>
           </div>
 
@@ -344,42 +346,51 @@ export const DoctorDashboard: React.FC = () => {
                 )}
               </div>
 
-              {/* Longitudinal Vitals Trend Curves (Simulated Graphical Curve) */}
+              {/* Longitudinal vitals: built from this mother's REAL recorded visits */}
               <div style={{ background: '#F8FAFC', borderRadius: 'var(--radius-lg)', padding: '1.25rem', marginBottom: '1.5rem', border: '1px solid #E2E8F0' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
                   <div style={{ fontSize: '0.88rem', fontWeight: 800, color: 'var(--navy-deep)', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                     <TrendingUp size={16} color="#0284C7" />
                     Longitudinal Blood Pressure & Hemoglobin Trajectory
                   </div>
-                  <span style={{ fontSize: '0.75rem', color: '#64748B' }}>MoHFW Surveillance Curve</span>
+                  <span style={{ fontSize: '0.75rem', color: '#64748B' }}>From recorded visits</span>
                 </div>
 
-                {/* Visual Chart Representation */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.75rem', textAlign: 'center' }}>
-                  <div style={{ background: '#FFFFFF', padding: '0.75rem', borderRadius: 'var(--radius-md)', border: '1px solid #E2E8F0' }}>
-                    <div style={{ fontSize: '0.72rem', color: '#64748B', fontWeight: 700 }}>ANC-1 (Wk 10)</div>
-                    <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--navy-deep)', marginTop: '0.2rem' }}>118 / 76</div>
-                    <div style={{ fontSize: '0.72rem', color: '#16A34A', fontWeight: 600 }}>Hb: 11.4 g/dL</div>
-                  </div>
-
-                  <div style={{ background: '#FFFFFF', padding: '0.75rem', borderRadius: 'var(--radius-md)', border: '1px solid #E2E8F0' }}>
-                    <div style={{ fontSize: '0.72rem', color: '#64748B', fontWeight: 700 }}>ANC-2 (Wk 19)</div>
-                    <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--navy-deep)', marginTop: '0.2rem' }}>122 / 78</div>
-                    <div style={{ fontSize: '0.72rem', color: '#16A34A', fontWeight: 600 }}>Hb: 11.0 g/dL</div>
-                  </div>
-
-                  <div style={{ background: '#FEF2F2', padding: '0.75rem', borderRadius: 'var(--radius-md)', border: '1.5px solid #EF4444' }}>
-                    <div style={{ fontSize: '0.72rem', color: '#991B1B', fontWeight: 700 }}>ANC-3 (Wk 28) ⚠️</div>
-                    <div style={{ fontSize: '1.1rem', fontWeight: 800, color: '#B91C1C', marginTop: '0.2rem' }}>142 / 92</div>
-                    <div style={{ fontSize: '0.72rem', color: '#B91C1C', fontWeight: 600 }}>Hb: 10.6 g/dL</div>
-                  </div>
-
-                  <div style={{ background: '#F0F9FF', padding: '0.75rem', borderRadius: 'var(--radius-md)', border: '1px dashed #0284C7' }}>
-                    <div style={{ fontSize: '0.72rem', color: '#0369A1', fontWeight: 700 }}>Target (Wk 32)</div>
-                    <div style={{ fontSize: '1.1rem', fontWeight: 800, color: '#0284C7', marginTop: '0.2rem' }}>&lt; 130 / 80</div>
-                    <div style={{ fontSize: '0.72rem', color: '#0369A1', fontWeight: 600 }}>Under Labetalol</div>
-                  </div>
-                </div>
+                {(() => {
+                  const history = [...selectedMotherVisits]
+                    .sort((a, b) => a.date.localeCompare(b.date))
+                    .slice(-4);
+                  if (history.length === 0) {
+                    return (
+                      <div style={{ background: '#FFFFFF', padding: '1rem', borderRadius: 'var(--radius-md)', border: '1px dashed #CBD5E1', color: '#64748B', fontSize: '0.88rem', textAlign: 'center' }}>
+                        No visits recorded yet for this mother.
+                      </div>
+                    );
+                  }
+                  return (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.75rem', textAlign: 'center' }}>
+                      {history.map((v) => {
+                        const highBp = v.bpSystolic >= 140 || v.bpDiastolic >= 90;
+                        const lowHb = v.hemoglobin < 9;
+                        const warn = highBp || lowHb;
+                        return (
+                          <div key={v.id} style={{ background: warn ? '#FEF2F2' : '#FFFFFF', padding: '0.75rem', borderRadius: 'var(--radius-md)', border: warn ? '1.5px solid #EF4444' : '1px solid #E2E8F0' }}>
+                            <div style={{ fontSize: '0.72rem', color: warn ? '#991B1B' : '#64748B', fontWeight: 700 }}>
+                              {v.visitType} (Wk {v.gestationalAgeWeeks}){warn ? ' ⚠️' : ''}
+                            </div>
+                            <div style={{ fontSize: '1.1rem', fontWeight: 800, color: highBp ? '#B91C1C' : 'var(--navy-deep)', marginTop: '0.2rem' }}>
+                              {v.bpSystolic} / {v.bpDiastolic}
+                            </div>
+                            <div style={{ fontSize: '0.72rem', color: lowHb ? '#B91C1C' : v.hemoglobin < 11 ? '#B45309' : '#16A34A', fontWeight: 600 }}>
+                              Hb: {v.hemoglobin} g/dL
+                            </div>
+                            <div style={{ fontSize: '0.68rem', color: '#94A3B8', marginTop: '0.15rem' }}>{v.date}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Recorded Visits & Clinical Notes List */}

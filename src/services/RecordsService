@@ -1,0 +1,144 @@
+/**
+ * Shared central patient database (Supabase / PostgreSQL).
+ *
+ * Every verified ASHA worker and Doctor reads and writes the SAME tables, so a
+ * mother registered or a report added on one device is visible on all others.
+ * Row-Level Security (see supabase/shared_records.sql) decides who may see what.
+ *
+ * When Supabase is not configured the app falls back to its old on-device
+ * demo storage, and `enabled()` returns false.
+ */
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import type { Mother, VisitRecord } from '../types';
+import {
+  motherToRow, motherPatchToRow, rowToMother, visitToRow, rowToVisit,
+  newRecordId, isUuid, isRetryableError
+} from './recordMappers';
+
+export { newRecordId, isUuid, isRetryableError };
+
+const PAGE = 1000;
+
+interface DbError { message: string; code?: string; status?: number }
+
+function check<T extends { error: any; status?: number }>(res: T): T {
+  if (res.error) {
+    const e: DbError = {
+      message: res.error.message || 'Database request failed',
+      code: res.error.code || '',
+      status: res.status
+    };
+    throw e;
+  }
+  return res;
+}
+
+function client() {
+  if (!supabase) throw { message: 'Shared database is not configured', code: '' } as DbError;
+  return supabase;
+}
+
+async function fetchAllRows(table: 'maternal_patients' | 'visit_records'): Promise<Record<string, any>[]> {
+  const sb = client();
+  const rows: Record<string, any>[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const res = check(
+      await sb.from(table).select('*').order('created_at', { ascending: false }).range(from, from + PAGE - 1)
+    );
+    const batch = (res.data ?? []) as Record<string, any>[];
+    rows.push(...batch);
+    if (batch.length < PAGE) break;
+  }
+  return rows;
+}
+
+export const recordsService = {
+  /** True when a shared cloud database is available for patient records. */
+  enabled(): boolean {
+    return isSupabaseConfigured() && !!supabase;
+  },
+
+  /** Download every record this user is allowed to see. */
+  async fetchAll(): Promise<{ mothers: Mother[]; visits: VisitRecord[] }> {
+    const [m, v] = await Promise.all([fetchAllRows('maternal_patients'), fetchAllRows('visit_records')]);
+    return { mothers: m.map(rowToMother), visits: v.map(rowToVisit) };
+  },
+
+  /** Create a mother. Safe to repeat (an existing record is left untouched). */
+  async registerMother(mother: Mother, actorId?: string): Promise<void> {
+    check(
+      await client()
+        .from('maternal_patients')
+        .upsert(motherToRow(mother, actorId), { onConflict: 'id', ignoreDuplicates: true })
+    );
+  },
+
+  /** Change selected fields of a mother. */
+  async updateMother(motherId: string, patch: Partial<Mother>): Promise<void> {
+    const row = motherPatchToRow(patch);
+    if (Object.keys(row).length === 0) return;
+    check(await client().from('maternal_patients').update(row).eq('id', motherId));
+  },
+
+  /**
+   * Store a new visit/report and update the mother's summary. The mother's
+   * current risk reasons are read first so two workers' findings are merged
+   * instead of one overwriting the other.
+   */
+  async recordVisit(visit: VisitRecord, motherPatch: Partial<Mother>, actorId: string): Promise<void> {
+    const sb = client();
+    check(
+      await sb
+        .from('visit_records')
+        .upsert(visitToRow(visit, actorId), { onConflict: 'id', ignoreDuplicates: true })
+    );
+
+    const cur = check(
+      await sb
+        .from('maternal_patients')
+        .select('risk_level, risk_reasons, last_visit_date, gestational_weeks')
+        .eq('id', visit.motherId)
+        .maybeSingle()
+    ).data as { risk_level: string; risk_reasons: string[] | null; last_visit_date: string | null; gestational_weeks: number } | null;
+    if (!cur) return; // mother not visible / deleted - nothing to summarise
+
+    const patch: Partial<Mother> = { ...motherPatch };
+    const reasons = new Set<string>([...(cur.risk_reasons ?? []), ...(motherPatch.riskReasons ?? [])]);
+    patch.riskReasons = Array.from(reasons);
+    if (cur.risk_level === 'high') patch.riskLevel = 'high'; // never downgrade risk from a stale device
+    // Only move "last visit" / weeks forward, never backwards
+    if (cur.last_visit_date && motherPatch.lastVisitDate && motherPatch.lastVisitDate < cur.last_visit_date) {
+      delete patch.lastVisitDate;
+      delete patch.gestationalWeeks;
+    }
+    await recordsService.updateMother(visit.motherId, patch);
+  },
+
+  /** A doctor's review of a visit, plus the follow-up change on the mother. */
+  async saveDoctorReview(
+    visitId: string,
+    review: NonNullable<VisitRecord['doctorReview']>,
+    motherId?: string,
+    motherPatch?: Partial<Mother>
+  ): Promise<void> {
+    check(await client().from('visit_records').update({ doctor_review: review }).eq('id', visitId));
+    if (motherId && motherPatch) await recordsService.updateMother(motherId, motherPatch);
+  },
+
+  /**
+   * Get notified when any other device changes patients or visits.
+   * Returns an unsubscribe function. (Polling in CareContext is the safety net
+   * when realtime is unavailable.)
+   */
+  subscribe(onChange: () => void): () => void {
+    if (!supabase) return () => {};
+    const channel = supabase
+      .channel(`matru-shared-records-${Math.random().toString(36).slice(2, 8)}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'maternal_patients' }, onChange)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'visit_records' }, onChange)
+      .subscribe();
+    return () => {
+      supabase?.removeChannel(channel);
+    };
+  }
+};

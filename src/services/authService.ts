@@ -174,6 +174,29 @@ async function initializeLocalAccounts(): Promise<StoredAccount[]> {
   return initialAccounts;
 }
 
+
+/** Convert a row of the shared `profiles` table into an app User. */
+function profileRowToUser(profile: any): User {
+  return {
+    id: profile.id,
+    name: profile.full_name,
+    role: profile.role,
+    designation: profile.designation || '',
+    location: profile.location || '',
+    phone: profile.phone,
+    avatar: profile.role === 'doctor' ? '🩺' : (profile.role === 'asha' ? '👩‍⚕️' : '🤰'),
+    accountStatus: profile.account_status || 'active',
+    medicalRegNo: profile.medical_reg_no,
+    hospitalAffiliation: profile.hospital_affiliation,
+    ashaWorkerId: profile.asha_worker_id,
+    assignedVillage: profile.assigned_village,
+    associatedPhc: profile.assigned_phc || profile.hospital_affiliation,
+    registrationDate: profile.created_at,
+    verifiedAt: profile.verified_at,
+    verifiedBy: profile.verified_by
+  };
+}
+
 export const authService = {
   /**
    * Check if Supabase cloud backend is configured
@@ -687,6 +710,17 @@ export const authService = {
    * Retrieve list of accounts pending institutional verification
    */
   async getPendingAccounts(): Promise<User[]> {
+    // Shared database: only verified doctors can read other people's profiles
+    if (isSupabaseConfigured() && supabase) {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('account_status', 'pending_approval')
+        .in('role', ['doctor', 'asha'])
+        .order('created_at', { ascending: true });
+      if (error) return [];
+      return (data || []).map(profileRowToUser);
+    }
     const accounts = await initializeLocalAccounts();
     return accounts
       .filter(acc => acc.accountStatus === 'pending_approval')
@@ -712,6 +746,25 @@ export const authService = {
    * Institutional approval workflow: Authorize a pending Doctor or ASHA account
    */
   async approveAccount(accountId: string, approvedBy: string): Promise<User> {
+    // Shared database: activate the account so the worker can see the shared patient records
+    if (isSupabaseConfigured() && supabase) {
+      const { data: existing } = await supabase.from('profiles').select('role').eq('id', accountId).maybeSingle();
+      const designation = existing?.role === 'doctor' ? 'Verified Medical Officer' : 'Accredited ASHA Field Worker';
+      const { data, error } = await supabase
+        .from('profiles')
+        .update({
+          account_status: 'active',
+          verified_at: new Date().toISOString(),
+          verified_by: approvedBy,
+          designation
+        })
+        .eq('id', accountId)
+        .select('*')
+        .maybeSingle();
+      if (error) throw new Error(error.message || 'Could not approve this account.');
+      if (!data) throw new Error('Only a verified doctor can approve accounts, or the account was not found.');
+      return profileRowToUser(data);
+    }
     const accounts = await initializeLocalAccounts();
     const idx = accounts.findIndex(acc => acc.id === accountId);
     if (idx === -1) {
@@ -765,6 +818,11 @@ export const authService = {
    * Institutional rejection workflow
    */
   async rejectAccount(accountId: string): Promise<void> {
+    if (isSupabaseConfigured() && supabase) {
+      const { error } = await supabase.from('profiles').update({ account_status: 'rejected' }).eq('id', accountId);
+      if (error) throw new Error(error.message || 'Could not reject this account.');
+      return;
+    }
     const accounts = await initializeLocalAccounts();
     const idx = accounts.findIndex(acc => acc.id === accountId);
     if (idx !== -1) {

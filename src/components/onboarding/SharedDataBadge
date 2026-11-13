@@ -1,0 +1,70 @@
+import React from 'react';
+import { Cloud, CloudOff, RefreshCw, TriangleAlert, Database } from 'lucide-react';
+import { useCare } from '../context/CareContext';
+
+/**
+ * Small status strip showing whether patient records are stored in the shared
+ * central database (visible to every verified ASHA / Doctor) or only on this device.
+ */
+export const SharedDataBadge: React.FC = () => {
+  const { dataMode, cloudStatus, cloudError, lastSyncedTime, offlineQueue, refreshSharedRecords, isSyncing, syncOfflineQueue } = useCare();
+
+  const base: React.CSSProperties = {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap',
+    borderRadius: 'var(--radius-lg)', padding: '0.7rem 1.1rem', marginBottom: '1.25rem', fontSize: '0.86rem', fontWeight: 600
+  };
+
+  if (dataMode === 'local') {
+    return (
+      <div data-testid="shared-data-badge" data-mode="local" style={{ ...base, background: '#FFFBEB', border: '1.5px solid #F59E0B', color: '#92400E' }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <Database size={17} />
+          Demo mode: records are saved on THIS device only and are not shared with other workers. Connect the shared database (Supabase) to enable sharing.
+        </span>
+      </div>
+    );
+  }
+
+  const failed = offlineQueue.filter((q) => q.status === 'failed').length;
+  const waiting = offlineQueue.length - failed;
+
+  let tone = { bg: '#ECFDF5', border: '#10B981', color: '#065F46' };
+  let icon = <Cloud size={17} />;
+  let text = `Shared database connected — all workers see the same records. Last synced ${lastSyncedTime}.`;
+
+  if (cloudStatus === 'connecting' || cloudStatus === 'idle') {
+    tone = { bg: '#EFF6FF', border: '#3B82F6', color: '#1E40AF' };
+    icon = <RefreshCw size={17} />;
+    text = 'Connecting to the shared database…';
+  } else if (cloudStatus === 'offline') {
+    tone = { bg: '#F1F5F9', border: '#94A3B8', color: '#334155' };
+    icon = <CloudOff size={17} />;
+    text = waiting > 0
+      ? `Offline — ${waiting} change${waiting === 1 ? '' : 's'} saved on this device and will upload automatically when you are back online.`
+      : 'Offline — showing the last records saved on this device. Changes by others will appear when you reconnect.';
+  } else if (cloudStatus === 'error' || failed > 0) {
+    tone = { bg: '#FEF2F2', border: '#EF4444', color: '#991B1B' };
+    icon = <TriangleAlert size={17} />;
+    text = `${failed > 0 ? `${failed} change${failed === 1 ? ' was' : 's were'} rejected by the shared database. ` : ''}${cloudError || 'Please check your account is verified.'}`;
+  } else if (waiting > 0) {
+    tone = { bg: '#EEF2FF', border: '#6366F1', color: '#3730A3' };
+    icon = <RefreshCw size={17} />;
+    text = `${waiting} change${waiting === 1 ? '' : 's'} waiting to upload to the shared database.`;
+  }
+
+  return (
+    <div data-testid="shared-data-badge" data-mode="cloud" data-status={cloudStatus} style={{ ...base, background: tone.bg, border: `1.5px solid ${tone.border}`, color: tone.color }}>
+      <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>{icon}{text}</span>
+      <button
+        type="button"
+        onClick={() => (waiting > 0 ? syncOfflineQueue() : refreshSharedRecords())}
+        disabled={isSyncing}
+        style={{ background: 'transparent', border: `1px solid ${tone.border}`, color: tone.color, borderRadius: 'var(--radius-md)', padding: '0.3rem 0.8rem', fontWeight: 700, cursor: isSyncing ? 'wait' : 'pointer' }}
+      >
+        {isSyncing ? 'Syncing…' : waiting > 0 ? 'Upload now' : 'Refresh'}
+      </button>
+    </div>
+  );
+};
+
+export default SharedDataBadge;

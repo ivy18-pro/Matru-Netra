@@ -1,7 +1,12 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback, ReactNode } from 'react';
 import { User, UserRole, Mother, VisitRecord, Milestone, OfflineQueueItem, Language } from '../types';
 import { INITIAL_MOTHERS, INITIAL_VISITS, SUNITA_MILESTONES } from '../data/mockData';
 import { authService, RegisterPatientInput, RegisterDoctorInput, RegisterAshaInput } from '../services/authService';
+import { recordsService, newRecordId, isRetryableError } from '../services/recordsService';
+import {
+  overlayPendingChanges,
+  RegisterMotherPayload, RecordVisitPayload, DoctorReviewPayload, UpdateMotherPayload
+} from '../services/recordMappers';
 
 interface CareContextType {
   currentUser: User | null;
@@ -23,6 +28,12 @@ interface CareContextType {
   loginModalOpen: boolean;
   authModalDefaultRole: UserRole;
   pendingAccounts: User[];
+
+  // Shared central database
+  dataMode: 'cloud' | 'local';
+  cloudStatus: 'idle' | 'connecting' | 'live' | 'offline' | 'error';
+  cloudError: string;
+  refreshSharedRecords: () => Promise<void>;
   
   // Real Authentication & Session Actions
   loginWithCredentials: (email: string, password: string, intendedRole: UserRole) => Promise<void>;
@@ -74,28 +85,32 @@ interface CareContextType {
 const CareContext = createContext<CareContextType | undefined>(undefined);
 
 // LocalStorage Keys
-const STORAGE_KEY_MOTHERS = 'matru_netra_mothers_v2';
-const STORAGE_KEY_VISITS = 'matru_netra_visits_v2';
+// When the shared cloud database is configured, records live in the cloud and
+// these keys hold only an offline read-cache + the not-yet-uploaded queue.
+const CLOUD = recordsService.enabled();
+const STORAGE_KEY_MOTHERS = CLOUD ? 'matru_netra_cloud_mothers_v1' : 'matru_netra_mothers_v2';
+const STORAGE_KEY_VISITS = CLOUD ? 'matru_netra_cloud_visits_v1' : 'matru_netra_visits_v2';
 const STORAGE_KEY_MILESTONES = 'matru_netra_milestones_v2';
-const STORAGE_KEY_QUEUE = 'matru_netra_queue_v2';
+const STORAGE_KEY_QUEUE = CLOUD ? 'matru_netra_cloud_queue_v1' : 'matru_netra_queue_v2';
+const SYNC_POLL_MS = Number(import.meta.env.VITE_SYNC_POLL_MS) || 30000;
 
 export const CareProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   // Initialize state from LocalStorage
   const [mothers, setMothers] = useState<Mother[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_MOTHERS);
-      return saved ? JSON.parse(saved) : INITIAL_MOTHERS;
+      return saved ? JSON.parse(saved) : (CLOUD ? [] : INITIAL_MOTHERS);
     } catch {
-      return INITIAL_MOTHERS;
+      return CLOUD ? [] : INITIAL_MOTHERS;
     }
   });
 
   const [visits, setVisits] = useState<VisitRecord[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_VISITS);
-      return saved ? JSON.parse(saved) : INITIAL_VISITS;
+      return saved ? JSON.parse(saved) : (CLOUD ? [] : INITIAL_VISITS);
     } catch {
-      return INITIAL_VISITS;
+      return CLOUD ? [] : INITIAL_VISITS;
     }
   });
 
@@ -125,8 +140,21 @@ export const CareProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [loginModalOpen, setLoginModalOpen] = useState<boolean>(false);
   const [pendingAccounts, setPendingAccounts] = useState<User[]>([]);
 
+  // ===== Shared central database engine =====
+  const [cloudStatus, setCloudStatus] = useState<'idle' | 'connecting' | 'live' | 'offline' | 'error'>('idle');
+  const [cloudError, setCloudError] = useState<string>('');
+  const userRef = useRef<User | null>(null);
+  const queueRef = useRef<OfflineQueueItem[]>(offlineQueue);
+  const isOfflineRef = useRef<boolean>(false);
+  const fetchSeqRef = useRef(0);
+  const lastWriteRef = useRef(0);
+  const syncingRef = useRef(false);
+  queueRef.current = offlineQueue;
+
   // Field & Clinical states
   const [isOffline, setIsOffline] = useState<boolean>(false);
+  isOfflineRef.current = isOffline;
+  userRef.current = currentUser;
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [lastSyncedTime, setLastSyncedTime] = useState<string>('Just now');
   const [language, setLanguageState] = useState<Language>(() => {
@@ -194,23 +222,28 @@ export const CareProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const updateMotherLanguageByAsha = (motherId: string, lang: Language, notes?: string) => {
     const ashaName = currentUser?.name || 'Anita Devi';
-    setMothers((prev) =>
-      prev.map((m) => {
-        if (m.id === motherId) {
-          return {
-            ...m,
-            preferredLanguage: lang,
-            languageOnboardingCompleted: true,
-            ashaAssistedOnboarding: {
-              assistedBy: ashaName,
-              assistedAt: new Date().toISOString(),
-              notes: notes || 'Language preference configured with ASHA facilitation'
-            }
-          };
-        }
-        return m;
-      })
-    );
+    const patch: Partial<Mother> = {
+      preferredLanguage: lang,
+      languageOnboardingCompleted: true,
+      ashaAssistedOnboarding: {
+        assistedBy: ashaName,
+        assistedAt: new Date().toISOString(),
+        notes: notes || 'Language preference configured with ASHA facilitation'
+      }
+    };
+    setMothers((prev) => prev.map((m) => (m.id === motherId ? { ...m, ...patch } : m)));
+
+    if (CLOUD && currentUser) {
+      commitToCloud(
+        makeQueueItem('UPDATE_MOTHER', `Language preference updated (${lang.toUpperCase()})`, {
+          actorId: currentUser.id,
+          motherId,
+          patch
+        } as UpdateMotherPayload),
+        undefined,
+        motherId
+      );
+    }
   };
 
   // Restore authenticated session on page load across refreshes
@@ -271,12 +304,16 @@ export const CareProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   // Handle hardware online/offline events
   useEffect(() => {
     const handleOnline = () => {
+      isOfflineRef.current = false;
       setIsOffline(false);
       if (offlineQueue.length > 0) {
         syncOfflineQueue();
+      } else if (CLOUD) {
+        void refreshSharedRecords();
       }
     };
     const handleOffline = () => {
+      isOfflineRef.current = true;
       setIsOffline(true);
     };
 
@@ -287,6 +324,149 @@ export const CareProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       window.removeEventListener('offline', handleOffline);
     };
   }, [offlineQueue]);
+
+  // ---- Shared database: download + merge ----
+  const refreshSharedRecords = useCallback(async () => {
+    if (!CLOUD) return;
+    const user = userRef.current;
+    if (!user || (user.accountStatus && user.accountStatus !== 'active')) return;
+    if (isOfflineRef.current || (typeof navigator !== 'undefined' && navigator.onLine === false)) {
+      setCloudStatus('offline');
+      return;
+    }
+
+    const seq = ++fetchSeqRef.current;
+    const startedAt = Date.now();
+    setCloudStatus((prev) => (prev === 'live' ? 'live' : 'connecting'));
+    try {
+      const { mothers: sm, visits: sv } = await recordsService.fetchAll();
+      // A newer download started, or we saved something while this one was in flight:
+      // this snapshot may be stale, so discard it and download again.
+      if (seq !== fetchSeqRef.current) return;
+      if (lastWriteRef.current > startedAt) {
+        setTimeout(() => { void refreshSharedRecords(); }, 250);
+        return;
+      }
+      const merged = overlayPendingChanges(sm, sv, queueRef.current, user.id);
+      setMothers(merged.mothers);
+      setVisits(merged.visits);
+      setCloudStatus('live');
+      setCloudError('');
+      setLastSyncedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+      if (user.role === 'mother') {
+        const mine = merged.mothers.find((m) => m.userId === user.id) || merged.mothers[0];
+        if (mine) setSelectedMotherId(mine.id);
+      }
+    } catch (err: any) {
+      if (seq !== fetchSeqRef.current) return;
+      setCloudStatus(isRetryableError(err) ? 'offline' : 'error');
+      setCloudError(err?.message || 'Could not reach the shared database.');
+    }
+  }, []);
+
+  // Keep this device up to date while signed in: live push + polling + on focus
+  useEffect(() => {
+    if (!CLOUD || !currentUser) return;
+    if (currentUser.accountStatus && currentUser.accountStatus !== 'active') return;
+
+    void refreshSharedRecords();
+
+    let debounce: ReturnType<typeof setTimeout> | undefined;
+    const onRemoteChange = () => {
+      clearTimeout(debounce);
+      debounce = setTimeout(() => { void refreshSharedRecords(); }, 400);
+    };
+    const unsubscribe = recordsService.subscribe(onRemoteChange);
+    const poll = setInterval(() => { void refreshSharedRecords(); }, SYNC_POLL_MS);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void refreshSharedRecords();
+    };
+    window.addEventListener('focus', onVisible);
+    document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      clearTimeout(debounce);
+      clearInterval(poll);
+      unsubscribe();
+      window.removeEventListener('focus', onVisible);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [currentUser?.id, currentUser?.accountStatus, refreshSharedRecords]);
+
+  // ---- Shared database: upload (or queue when offline) ----
+  const makeQueueItem = (type: OfflineQueueItem['type'], summary: string, payload: any): OfflineQueueItem => ({
+    id: `Q-${newRecordId()}`,
+    type,
+    timestamp: new Date().toISOString(),
+    summary,
+    payload,
+    status: 'queued'
+  });
+
+  const uploadQueueItem = async (item: OfflineQueueItem): Promise<void> => {
+    switch (item.type) {
+      case 'REGISTER_MOTHER': {
+        const p = item.payload as RegisterMotherPayload;
+        await recordsService.registerMother(p.mother, p.actorId);
+        break;
+      }
+      case 'RECORD_VISIT': {
+        const p = item.payload as RecordVisitPayload;
+        await recordsService.recordVisit(p.visit, p.motherPatch, p.actorId);
+        break;
+      }
+      case 'DOCTOR_REVIEW': {
+        const p = item.payload as DoctorReviewPayload;
+        await recordsService.saveDoctorReview(p.visitId, p.review, p.motherId, p.motherPatch);
+        break;
+      }
+      case 'UPDATE_MOTHER': {
+        const p = item.payload as UpdateMotherPayload;
+        await recordsService.updateMother(p.motherId, p.patch);
+        break;
+      }
+      default:
+        break;
+    }
+  };
+
+  const markRecordsPending = (visitId?: string, motherId?: string) => {
+    if (visitId) {
+      setVisits((prev) => prev.map((v) => (v.id === visitId ? { ...v, syncStatus: 'Pending synchronisation' } : v)));
+    }
+    if (motherId) {
+      setMothers((prev) => prev.map((m) => (m.id === motherId ? { ...m, syncStatus: 'Pending synchronisation' } : m)));
+    }
+  };
+
+  /** Send a change to the shared database now, or keep it in the offline queue until we can. */
+  const commitToCloud = (item: OfflineQueueItem, visitId?: string, motherId?: string) => {
+    if (isOfflineRef.current || (typeof navigator !== 'undefined' && navigator.onLine === false)) {
+      setOfflineQueue((prev) => [...prev, item]);
+      markRecordsPending(visitId, motherId);
+      return;
+    }
+    lastWriteRef.current = Date.now();
+    uploadQueueItem(item)
+      .then(() => {
+        lastWriteRef.current = Date.now();
+        setCloudStatus('live');
+        setCloudError('');
+        setLastSyncedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+      })
+      .catch((err: any) => {
+        lastWriteRef.current = Date.now();
+        if (isRetryableError(err)) {
+          setOfflineQueue((prev) => [...prev, item]);
+          setCloudStatus('offline');
+        } else {
+          setOfflineQueue((prev) => [...prev, { ...item, status: 'failed', error: err?.message }]);
+          setCloudStatus('error');
+          setCloudError(err?.message || 'The shared database rejected this change.');
+        }
+        markRecordsPending(visitId, motherId);
+      });
+  };
 
   // Audio synthesizer for ambient village mood
   const [audioContext, setAudioContext] = useState<AudioContext | null>(null);
@@ -365,7 +545,8 @@ export const CareProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     edd.setDate(edd.getDate() + (40 - (input.gestationalWeeks || 12)) * 7);
 
     const newMotherRecord: Mother = {
-      id: user.motherProfileId || `MOM-${Math.floor(100 + Math.random() * 900)}`,
+      id: CLOUD ? newRecordId() : (user.motherProfileId || `MOM-${Math.floor(100 + Math.random() * 900)}`),
+      userId: CLOUD ? user.id : undefined,
       name: input.fullName,
       age: input.age || 24,
       husbandName: input.husbandName || '',
@@ -382,17 +563,27 @@ export const CareProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       riskLevel: 'normal',
       riskReasons: [],
       status: 'Scheduled',
-      assignedAshaId: 'usr_asha_kalyanpur_01',
-      assignedAshaName: 'Anita Devi',
-      assignedAshaPhone: '+91 98765-43210',
-      assignedDoctorId: 'usr_doc_rampur_01',
-      assignedDoctorName: 'Dr. Priya Sharma',
+      assignedAshaId: CLOUD ? '' : 'usr_asha_kalyanpur_01',
+      assignedAshaName: CLOUD ? 'To be assigned' : 'Anita Devi',
+      assignedAshaPhone: CLOUD ? '' : '+91 98765-43210',
+      assignedDoctorId: CLOUD ? '' : 'usr_doc_rampur_01',
+      assignedDoctorName: CLOUD ? 'PHC Medical Officer' : 'Dr. Priya Sharma',
       nextScheduledDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
       nextScheduledType: 'ANC-1 Baseline Checkup',
       syncStatus: 'Synchronised'
     };
 
     setMothers((prev) => [newMotherRecord, ...prev]);
+    if (CLOUD) {
+      commitToCloud(
+        makeQueueItem('REGISTER_MOTHER', `Self-registration: ${newMotherRecord.name}`, {
+          actorId: user.id,
+          mother: newMotherRecord
+        } as RegisterMotherPayload),
+        undefined,
+        newMotherRecord.id
+      );
+    }
     setCurrentUser(user);
     setCurrentRole('mother');
     setSelectedMotherId(newMotherRecord.id);
@@ -472,6 +663,17 @@ export const CareProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
    */
   const logout = async () => {
     await authService.logout();
+    if (CLOUD) {
+      // Never leave one worker's patient list on the screen / device for the next person
+      setMothers([]);
+      setVisits([]);
+      setCloudStatus('idle');
+      setCloudError('');
+      try {
+        localStorage.removeItem(STORAGE_KEY_MOTHERS);
+        localStorage.removeItem(STORAGE_KEY_VISITS);
+      } catch { /* ignore */ }
+    }
     setCurrentUser(null);
     setCurrentRole('guest');
     setSelectedMotherId(null);
@@ -497,14 +699,65 @@ export const CareProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const toggleOfflineMode = (force?: boolean) => {
     const nextState = force !== undefined ? force : !isOffline;
+    isOfflineRef.current = nextState;
     setIsOffline(nextState);
 
-    if (!nextState && offlineQueue.length > 0) {
-      syncOfflineQueue();
+    if (!nextState) {
+      if (offlineQueue.length > 0) {
+        syncOfflineQueue();
+      } else if (CLOUD) {
+        void refreshSharedRecords();
+      }
     }
   };
 
   const syncOfflineQueue = async () => {
+    // ---- Shared database: really upload everything that was saved offline ----
+    if (CLOUD) {
+      const user = userRef.current;
+      if (syncingRef.current) return;
+      if (!user) return;
+      const pending = queueRef.current;
+      if (pending.length === 0) {
+        await refreshSharedRecords();
+        return;
+      }
+      syncingRef.current = true;
+      setIsSyncing(true);
+      lastWriteRef.current = Date.now();
+
+      const remaining: OfflineQueueItem[] = [];
+      let blocked = false; // stop at the first network failure so order is preserved
+      for (const item of pending) {
+        const belongsToOther = item.payload?.actorId && item.payload.actorId !== user.id;
+        if (blocked || belongsToOther || item.status === 'failed') {
+          remaining.push(item);
+          continue;
+        }
+        try {
+          await uploadQueueItem(item);
+        } catch (err: any) {
+          if (isRetryableError(err)) {
+            blocked = true;
+            remaining.push(item);
+          } else {
+            remaining.push({ ...item, status: 'failed', error: err?.message || 'Rejected by the shared database' });
+            setCloudError(err?.message || 'The shared database rejected a saved change.');
+          }
+        }
+      }
+
+      queueRef.current = remaining;
+      setOfflineQueue(remaining);
+      lastWriteRef.current = Date.now();
+      setIsSyncing(false);
+      syncingRef.current = false;
+      setCloudStatus(blocked ? 'offline' : remaining.some((q) => q.status === 'failed') ? 'error' : 'live');
+      await refreshSharedRecords();
+      return;
+    }
+
+    // ---- Local demo mode (no shared database configured) ----
     if (offlineQueue.length === 0) return;
     setIsSyncing(true);
 
@@ -524,7 +777,7 @@ export const CareProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const recordVisit = (visitData: Omit<VisitRecord, 'id' | 'createdAt' | 'syncStatus'>) => {
-    const newId = `VIS-${Date.now().toString().slice(-4)}`;
+    const newId = CLOUD ? newRecordId() : `VIS-${Date.now().toString().slice(-4)}`;
     const syncStatus = isOffline ? 'Pending synchronisation' : 'Synchronised';
     
     let decisionAlert: string | undefined = undefined;
@@ -557,40 +810,34 @@ export const CareProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     setVisits((prev) => [newRecord, ...prev]);
 
-    setMothers((prev) =>
-      prev.map((m) => {
-        if (m.id === visitData.motherId) {
-          const newRisk = autoFlag ? 'high' : m.riskLevel;
-          const newReasons = autoReason && !m.riskReasons.includes(autoReason)
-            ? [...m.riskReasons, autoReason]
-            : m.riskReasons;
+    const target = mothers.find((m) => m.id === visitData.motherId);
+    const existingReasons = target?.riskReasons ?? [];
+    const motherPatch: Partial<Mother> = {
+      lastVisitDate: visitData.date,
+      gestationalWeeks: visitData.gestationalAgeWeeks,
+      riskLevel: autoFlag ? 'high' : (target?.riskLevel ?? 'normal'),
+      riskReasons: autoReason && !existingReasons.includes(autoReason) ? [...existingReasons, autoReason] : existingReasons,
+      status: autoFlag ? 'Follow-up required' : 'Completed'
+    };
 
-          return {
-            ...m,
-            lastVisitDate: visitData.date,
-            gestationalWeeks: visitData.gestationalAgeWeeks,
-            riskLevel: newRisk,
-            riskReasons: newReasons,
-            status: autoFlag ? 'Follow-up required' : 'Completed',
-            syncStatus: isOffline ? 'Pending synchronisation' : 'Synchronised'
-          };
-        }
-        return m;
-      })
+    setMothers((prev) =>
+      prev.map((m) =>
+        m.id === visitData.motherId
+          ? { ...m, ...motherPatch, syncStatus: isOffline ? 'Pending synchronisation' : 'Synchronised' }
+          : m
+      )
     );
 
-    if (isOffline) {
-      setOfflineQueue((prev) => [
-        ...prev,
-        {
-          id: `Q-${Date.now()}`,
-          type: 'RECORD_VISIT',
-          timestamp: new Date().toISOString(),
-          summary: `${visitData.visitType} for ${visitData.motherName}`,
-          payload: newRecord,
-          status: 'queued'
-        }
-      ]);
+    const queueItem = makeQueueItem('RECORD_VISIT', `${visitData.visitType} for ${visitData.motherName}`, {
+      actorId: currentUser?.id || '',
+      visit: newRecord,
+      motherPatch
+    } as RecordVisitPayload);
+
+    if (CLOUD) {
+      if (currentUser) commitToCloud(queueItem, newRecord.id, visitData.motherId);
+    } else if (isOffline) {
+      setOfflineQueue((prev) => [...prev, queueItem]);
     }
   };
 
@@ -605,37 +852,49 @@ export const CareProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   ) => {
     const reviewerName = currentUser?.name || 'Dr. Priya Sharma, MBBS, DGO';
+    const fullReview = {
+      ...review,
+      reviewedBy: reviewerName,
+      reviewedAt: new Date().toISOString()
+    };
 
     setVisits((prev) =>
-      prev.map((v) => {
-        if (v.id === visitId) {
-          return {
-            ...v,
-            doctorReview: {
-              ...review,
-              reviewedBy: reviewerName,
-              reviewedAt: new Date().toISOString()
-            }
-          };
-        }
-        return v;
-      })
+      prev.map((v) => (v.id === visitId ? { ...v, doctorReview: fullReview } : v))
     );
 
     const targetVisit = visits.find((v) => v.id === visitId);
     if (targetVisit) {
+      const targetMother = mothers.find((m) => m.id === targetVisit.motherId);
+      const motherPatch: Partial<Mother> = {
+        status: 'Action recorded',
+        nextScheduledDate: review.nextDoctorVisitDate || targetMother?.nextScheduledDate || '',
+        nextScheduledType: `Doctor Follow-up: ${review.actionCategory}`
+      };
       setMothers((prev) =>
-        prev.map((m) => {
-          if (m.id === targetVisit.motherId) {
-            return {
-              ...m,
-              status: 'Action recorded',
-              nextScheduledDate: review.nextDoctorVisitDate || m.nextScheduledDate,
-              nextScheduledType: `Doctor Follow-up: ${review.actionCategory}`
-            };
-          }
-          return m;
-        })
+        prev.map((m) => (m.id === targetVisit.motherId ? { ...m, ...motherPatch } : m))
+      );
+
+      if (CLOUD && currentUser) {
+        commitToCloud(
+          makeQueueItem('DOCTOR_REVIEW', `Doctor review for ${targetVisit.motherName}`, {
+            actorId: currentUser.id,
+            visitId,
+            motherId: targetVisit.motherId,
+            review: fullReview,
+            motherPatch
+          } as DoctorReviewPayload),
+          visitId,
+          targetVisit.motherId
+        );
+      }
+    } else if (CLOUD && currentUser) {
+      commitToCloud(
+        makeQueueItem('DOCTOR_REVIEW', 'Doctor review', {
+          actorId: currentUser.id,
+          visitId,
+          review: fullReview
+        } as DoctorReviewPayload),
+        visitId
       );
     }
   };
@@ -651,7 +910,7 @@ export const CareProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     para: number;
     bloodGroup: string;
   }) => {
-    const newId = `MOM-${(mothers.length + 1).toString().padStart(3, '0')}`;
+    const newId = CLOUD ? newRecordId() : `MOM-${(mothers.length + 1).toString().padStart(3, '0')}`;
     const lmp = new Date(data.lmpDate);
     const edd = new Date(lmp);
     edd.setDate(edd.getDate() + 280);
@@ -666,7 +925,7 @@ export const CareProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       husbandName: data.husbandName,
       village: data.village,
       subCentre: currentUser?.location?.includes('Sub-Centre') ? currentUser.location : 'Sub-Centre Kalyanpur',
-      phcName: 'PHC Rampur',
+      phcName: (CLOUD && currentUser?.associatedPhc) || 'PHC Rampur',
       phone: data.phone,
       lmpDate: data.lmpDate,
       eddDate: edd.toISOString().split('T')[0],
@@ -680,8 +939,8 @@ export const CareProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       assignedAshaId: currentUser?.id || 'usr_asha_kalyanpur_01',
       assignedAshaName: currentUser?.name || 'Anita Devi',
       assignedAshaPhone: currentUser?.phone || '+91 98765-43210',
-      assignedDoctorId: 'usr_doc_rampur_01',
-      assignedDoctorName: 'Dr. Priya Sharma',
+      assignedDoctorId: CLOUD ? '' : 'usr_doc_rampur_01',
+      assignedDoctorName: CLOUD ? 'PHC Medical Officer' : 'Dr. Priya Sharma',
       nextScheduledDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
       nextScheduledType: 'ANC-1 Complete Baseline Assessment',
       syncStatus: isOffline ? 'Pending synchronisation' : 'Synchronised'
@@ -689,22 +948,24 @@ export const CareProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     setMothers((prev) => [newMother, ...prev]);
 
-    if (isOffline) {
-      setOfflineQueue((prev) => [
-        ...prev,
-        {
-          id: `Q-${Date.now()}`,
-          type: 'REGISTER_MOTHER',
-          timestamp: new Date().toISOString(),
-          summary: `New Registration: ${newMother.name} (${newMother.village})`,
-          payload: newMother,
-          status: 'queued'
-        }
-      ]);
+    const queueItem = makeQueueItem('REGISTER_MOTHER', `New Registration: ${newMother.name} (${newMother.village})`, {
+      actorId: currentUser?.id || '',
+      mother: newMother
+    } as RegisterMotherPayload);
+
+    if (CLOUD) {
+      if (currentUser) commitToCloud(queueItem, undefined, newMother.id);
+    } else if (isOffline) {
+      setOfflineQueue((prev) => [...prev, queueItem]);
     }
   };
 
   const resetDemoData = () => {
+    if (CLOUD) {
+      // The shared database holds REAL patient data: never wipe it from a button.
+      void refreshSharedRecords();
+      return;
+    }
     localStorage.removeItem(STORAGE_KEY_MOTHERS);
     localStorage.removeItem(STORAGE_KEY_VISITS);
     localStorage.removeItem(STORAGE_KEY_MILESTONES);
@@ -739,6 +1000,10 @@ export const CareProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         loginModalOpen,
         authModalDefaultRole,
         pendingAccounts,
+        dataMode: CLOUD ? 'cloud' : 'local',
+        cloudStatus,
+        cloudError,
+        refreshSharedRecords,
         loginWithCredentials,
         registerMotherPatient,
         registerDoctor,

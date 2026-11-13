@@ -1,0 +1,266 @@
+/**
+ * Pure helpers (no network, no React) that translate between the app's
+ * camelCase records and the snake_case rows in the shared Supabase database,
+ * and that overlay not-yet-uploaded (offline) changes on top of server data.
+ */
+import type { Mother, VisitRecord, OfflineQueueItem, Language, RiskLevel, RecordStatus } from '../types';
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export const isUuid = (v: unknown): v is string => typeof v === 'string' && UUID_RE.test(v);
+
+const uuidOrNull = (v?: string | null): string | null => (isUuid(v) ? v : null);
+const emptyToNull = (v?: string | null): string | null => (v && v.trim() ? v : null);
+
+/** Generate an id that is safe to create on a device with no internet. */
+export const newRecordId = (): string => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  // Fallback for very old browsers
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+  });
+};
+
+// ---------------------------------------------------------------------------
+// Mother  <->  maternal_patients
+// ---------------------------------------------------------------------------
+export function motherToRow(m: Mother, actorId?: string | null) {
+  return {
+    id: m.id,
+    user_id: uuidOrNull(m.userId),
+    name: m.name,
+    age: m.age,
+    husband_name: emptyToNull(m.husbandName),
+    village: m.village,
+    sub_centre: m.subCentre || 'Unassigned Sub-Centre',
+    phc_name: m.phcName || 'Unassigned PHC',
+    phone: m.phone,
+    lmp_date: m.lmpDate,
+    edd_date: m.eddDate,
+    gestational_weeks: m.gestationalWeeks,
+    gravida: m.gravida,
+    para: m.para,
+    blood_group: emptyToNull(m.bloodGroup),
+    risk_level: m.riskLevel,
+    risk_reasons: m.riskReasons ?? [],
+    status: m.status,
+    assigned_asha_id: uuidOrNull(m.assignedAshaId),
+    assigned_asha_name: emptyToNull(m.assignedAshaName),
+    assigned_asha_phone: emptyToNull(m.assignedAshaPhone),
+    assigned_doctor_id: uuidOrNull(m.assignedDoctorId),
+    assigned_doctor_name: emptyToNull(m.assignedDoctorName),
+    last_visit_date: emptyToNull(m.lastVisitDate),
+    next_scheduled_date: emptyToNull(m.nextScheduledDate),
+    next_scheduled_type: emptyToNull(m.nextScheduledType),
+    baby_details: m.babyDetails ?? null,
+    preferred_language: m.preferredLanguage ?? null,
+    selected_state: m.selectedState ?? null,
+    selected_district: m.selectedDistrict ?? null,
+    language_onboarding_completed: !!m.languageOnboardingCompleted,
+    asha_assisted_onboarding: m.ashaAssistedOnboarding ?? null,
+    registered_by_id: uuidOrNull(actorId)
+  };
+}
+
+/** Convert a partial app-side change into a partial database update. */
+export function motherPatchToRow(p: Partial<Mother>): Record<string, unknown> {
+  const full = motherToRow({ ...(p as Mother) });
+  const map: Record<keyof Mother, string | null> = {
+    id: null, userId: null, name: 'name', age: 'age', husbandName: 'husband_name', village: 'village',
+    subCentre: 'sub_centre', phcName: 'phc_name', phone: 'phone', lmpDate: 'lmp_date', eddDate: 'edd_date',
+    gestationalWeeks: 'gestational_weeks', gravida: 'gravida', para: 'para', bloodGroup: 'blood_group',
+    riskLevel: 'risk_level', riskReasons: 'risk_reasons', status: 'status',
+    assignedAshaId: 'assigned_asha_id', assignedAshaName: 'assigned_asha_name', assignedAshaPhone: 'assigned_asha_phone',
+    assignedDoctorId: 'assigned_doctor_id', assignedDoctorName: 'assigned_doctor_name',
+    lastVisitDate: 'last_visit_date', nextScheduledDate: 'next_scheduled_date', nextScheduledType: 'next_scheduled_type',
+    syncStatus: null, preferredLanguage: 'preferred_language', selectedState: 'selected_state',
+    selectedDistrict: 'selected_district', languageOnboardingCompleted: 'language_onboarding_completed',
+    ashaAssistedOnboarding: 'asha_assisted_onboarding', babyDetails: 'baby_details'
+  };
+  const out: Record<string, unknown> = {};
+  (Object.keys(p) as (keyof Mother)[]).forEach((k) => {
+    const col = map[k];
+    if (col) out[col] = (full as Record<string, unknown>)[col];
+  });
+  return out;
+}
+
+export function rowToMother(r: Record<string, any>): Mother {
+  return {
+    id: r.id,
+    userId: r.user_id ?? undefined,
+    name: r.name,
+    age: r.age,
+    husbandName: r.husband_name ?? '',
+    village: r.village,
+    subCentre: r.sub_centre ?? '',
+    phcName: r.phc_name ?? '',
+    phone: r.phone,
+    lmpDate: r.lmp_date,
+    eddDate: r.edd_date,
+    gestationalWeeks: r.gestational_weeks,
+    gravida: r.gravida,
+    para: r.para,
+    bloodGroup: r.blood_group ?? '',
+    riskLevel: (r.risk_level ?? 'normal') as RiskLevel,
+    riskReasons: r.risk_reasons ?? [],
+    status: (r.status ?? 'Scheduled') as RecordStatus,
+    assignedAshaId: r.assigned_asha_id ?? '',
+    assignedAshaName: r.assigned_asha_name ?? '',
+    assignedAshaPhone: r.assigned_asha_phone ?? '',
+    assignedDoctorId: r.assigned_doctor_id ?? '',
+    assignedDoctorName: r.assigned_doctor_name ?? '',
+    lastVisitDate: r.last_visit_date ?? undefined,
+    nextScheduledDate: r.next_scheduled_date ?? '',
+    nextScheduledType: r.next_scheduled_type ?? '',
+    syncStatus: 'Synchronised',
+    preferredLanguage: (r.preferred_language ?? undefined) as Language | undefined,
+    selectedState: r.selected_state ?? undefined,
+    selectedDistrict: r.selected_district ?? undefined,
+    languageOnboardingCompleted: !!r.language_onboarding_completed,
+    ashaAssistedOnboarding: r.asha_assisted_onboarding ?? undefined,
+    babyDetails: r.baby_details ?? undefined
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Visit  <->  visit_records
+// ---------------------------------------------------------------------------
+export function visitToRow(v: VisitRecord, actorId: string) {
+  return {
+    id: v.id,
+    mother_id: v.motherId,
+    mother_name: v.motherName,
+    visit_type: v.visitType,
+    date: v.date,
+    gestational_age_weeks: v.gestationalAgeWeeks,
+    bp_systolic: v.bpSystolic,
+    bp_diastolic: v.bpDiastolic,
+    weight_kg: v.weightKg,
+    hemoglobin: v.hemoglobin,
+    fetal_heart_rate: v.fetalHeartRate ?? null,
+    baby_temp_celsius: v.babyTempCelsius ?? null,
+    danger_signs_reported: v.dangerSignsReported ?? [],
+    asha_observations: emptyToNull(v.ashaObservations),
+    flagged_for_doctor: !!v.flaggedForDoctor,
+    flag_reason: emptyToNull(v.flagReason),
+    decision_support_alert: emptyToNull(v.decisionSupportAlert),
+    doctor_review: v.doctorReview ?? null,
+    sync_status: 'Synchronised',
+    recorded_by_id: actorId,
+    recorded_by_name: emptyToNull(v.recordedBy),
+    created_at: v.createdAt
+  };
+}
+
+export function rowToVisit(r: Record<string, any>): VisitRecord {
+  return {
+    id: r.id,
+    motherId: r.mother_id,
+    motherName: r.mother_name,
+    visitType: r.visit_type,
+    date: r.date,
+    gestationalAgeWeeks: r.gestational_age_weeks,
+    bpSystolic: r.bp_systolic,
+    bpDiastolic: r.bp_diastolic,
+    weightKg: Number(r.weight_kg),
+    hemoglobin: Number(r.hemoglobin),
+    fetalHeartRate: r.fetal_heart_rate ?? undefined,
+    babyTempCelsius: r.baby_temp_celsius != null ? Number(r.baby_temp_celsius) : undefined,
+    dangerSignsReported: r.danger_signs_reported ?? [],
+    ashaObservations: r.asha_observations ?? '',
+    flaggedForDoctor: !!r.flagged_for_doctor,
+    flagReason: r.flag_reason ?? undefined,
+    decisionSupportAlert: r.decision_support_alert ?? undefined,
+    doctorReview: r.doctor_review ?? undefined,
+    syncStatus: 'Synchronised',
+    recordedBy: r.recorded_by_name ?? '',
+    createdAt: r.created_at
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Offline queue payload shapes
+// ---------------------------------------------------------------------------
+export interface RegisterMotherPayload { actorId?: string; mother: Mother }
+export interface RecordVisitPayload { actorId: string; visit: VisitRecord; motherPatch: Partial<Mother> }
+export interface DoctorReviewPayload {
+  actorId: string; visitId: string; motherId?: string;
+  review: NonNullable<VisitRecord['doctorReview']>; motherPatch?: Partial<Mother>;
+}
+export interface UpdateMotherPayload { actorId?: string; motherId: string; patch: Partial<Mother> }
+
+/**
+ * Overlay changes that have not reached the server yet on top of the freshly
+ * downloaded shared data, so a worker never "loses" what they just entered
+ * while offline, and sees it flagged as "Pending synchronisation".
+ */
+export function overlayPendingChanges(
+  serverMothers: Mother[],
+  serverVisits: VisitRecord[],
+  queue: OfflineQueueItem[],
+  actorId?: string
+): { mothers: Mother[]; visits: VisitRecord[] } {
+  let mothers = serverMothers.map((m) => ({ ...m }));
+  let visits = serverVisits.map((v) => ({ ...v }));
+
+  const mine = queue.filter((q) => {
+    const a = q.payload?.actorId;
+    return !a || !actorId || a === actorId;
+  });
+
+  const patchMother = (id: string, patch?: Partial<Mother>) => {
+    if (!patch) return;
+    mothers = mothers.map((m) => (m.id === id ? { ...m, ...patch, syncStatus: 'Pending synchronisation' } : m));
+  };
+
+  for (const item of mine) {
+    switch (item.type) {
+      case 'REGISTER_MOTHER': {
+        const p = item.payload as RegisterMotherPayload;
+        if (p?.mother && !mothers.some((m) => m.id === p.mother.id)) {
+          mothers = [{ ...p.mother, syncStatus: 'Pending synchronisation' }, ...mothers];
+        }
+        break;
+      }
+      case 'RECORD_VISIT': {
+        const p = item.payload as RecordVisitPayload;
+        if (p?.visit && !visits.some((v) => v.id === p.visit.id)) {
+          visits = [{ ...p.visit, syncStatus: 'Pending synchronisation' }, ...visits];
+        }
+        patchMother(p?.visit?.motherId, p?.motherPatch);
+        break;
+      }
+      case 'DOCTOR_REVIEW': {
+        const p = item.payload as DoctorReviewPayload;
+        visits = visits.map((v) => (v.id === p.visitId ? { ...v, doctorReview: p.review } : v));
+        if (p.motherId) patchMother(p.motherId, p.motherPatch);
+        break;
+      }
+      case 'UPDATE_MOTHER': {
+        const p = item.payload as UpdateMotherPayload;
+        patchMother(p.motherId, p.patch);
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  return { mothers, visits };
+}
+
+/** Decide whether a failed upload is worth retrying later (true) or is a permanent rejection (false). */
+export function isRetryableError(err: unknown): boolean {
+  const e = err as { code?: string; status?: number; message?: string } | null;
+  if (!e) return true;
+  const status = typeof e.status === 'number' ? e.status : undefined;
+  if (status !== undefined && (status >= 500 || status === 408 || status === 429 || status === 0)) return true;
+  const code = (e.code || '').toString();
+  if (!code) return true; // no database code => network / fetch failure
+  if (code.startsWith('PGRST30')) return true; // expired / missing JWT: sign-in will refresh
+  if (/^(08|53|57|58)/.test(code)) return true; // connection / resource errors
+  return false; // RLS (42501), constraint, validation errors etc. will never succeed on retry
+}

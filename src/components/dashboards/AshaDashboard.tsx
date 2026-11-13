@@ -26,6 +26,7 @@ import {
   Volume2,
   X
 } from 'lucide-react';
+import SharedDataBadge from '../SharedDataBadge';
 import { RecordVisitModal } from '../modals/RecordVisitModal';
 import { RegisterMotherModal } from '../modals/RegisterMotherModal';
 import { SUPPORTED_LANGUAGES, t } from '../../i18n/translations';
@@ -112,6 +113,8 @@ export const AshaDashboard: React.FC = () => {
     <div style={{ padding: '2rem 0', minHeight: 'calc(100vh - 70px)', background: 'var(--cream-bg)' }}>
       <div className="container">
         
+        <SharedDataBadge />
+
         {/* Offline Mode Alert Bar (if currently offline) */}
         {isOffline && (
           <div 

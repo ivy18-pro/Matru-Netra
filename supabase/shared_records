@@ -1,0 +1,236 @@
+-- ============================================================================
+-- MATRU-NETRA  |  SHARED PATIENT RECORDS MIGRATION
+-- ----------------------------------------------------------------------------
+-- Run this ONCE in the Supabase SQL Editor, AFTER supabase/schema.sql.
+-- It is safe to run again (idempotent).
+--
+-- What it does
+--   1. Every VERIFIED (active) ASHA worker and Doctor sees the SAME central
+--      patient list, visit history and doctor reviews - from any device.
+--   2. Mothers see only their own record.
+--   3. Unverified (pending / rejected / suspended) accounts see nothing.
+--   4. Fixes two problems in the original schema.sql policies:
+--        * "infinite recursion detected in policy for relation profiles"
+--          (policies on `profiles` queried `profiles` itself)
+--        * a user could set their own account_status to 'active'
+--   5. Lets a verified Doctor approve / reject ASHA & Doctor sign-ups.
+--   6. Switches on Realtime so a new record appears on other devices instantly.
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- 1. HELPER FUNCTIONS (SECURITY DEFINER avoids RLS recursion on `profiles`)
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.current_worker_role()
+RETURNS TEXT
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public
+AS $$
+    SELECT role FROM public.profiles
+    WHERE id = auth.uid()
+      AND account_status = 'active'
+      AND role IN ('asha', 'doctor');
+$$;
+
+CREATE OR REPLACE FUNCTION public.is_active_worker()
+RETURNS BOOLEAN
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public
+AS $$ SELECT public.current_worker_role() IS NOT NULL; $$;
+
+CREATE OR REPLACE FUNCTION public.is_active_doctor()
+RETURNS BOOLEAN
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public
+AS $$ SELECT public.current_worker_role() = 'doctor'; $$;
+
+CREATE OR REPLACE FUNCTION public.role_of(uid UUID)
+RETURNS TEXT
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public
+AS $$ SELECT role FROM public.profiles WHERE id = uid; $$;
+
+CREATE OR REPLACE FUNCTION public.status_of(uid UUID)
+RETURNS TEXT
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public
+AS $$ SELECT account_status FROM public.profiles WHERE id = uid; $$;
+
+REVOKE ALL ON FUNCTION public.current_worker_role() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.is_active_worker()    FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.is_active_doctor()    FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.role_of(UUID)         FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.status_of(UUID)       FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.current_worker_role() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.is_active_worker()    TO authenticated;
+GRANT EXECUTE ON FUNCTION public.is_active_doctor()    TO authenticated;
+GRANT EXECUTE ON FUNCTION public.role_of(UUID)         TO authenticated;
+GRANT EXECUTE ON FUNCTION public.status_of(UUID)       TO authenticated;
+
+-- ----------------------------------------------------------------------------
+-- 2. PROFILES POLICIES (replace the recursive ones)
+-- ----------------------------------------------------------------------------
+DROP POLICY IF EXISTS "Users can view own profile" ON public.profiles;
+DROP POLICY IF EXISTS "Doctors and ASHAs can view mother profiles in their jurisdiction" ON public.profiles;
+DROP POLICY IF EXISTS "Users can update own profile" ON public.profiles;
+DROP POLICY IF EXISTS "profiles_select" ON public.profiles;
+DROP POLICY IF EXISTS "profiles_update_own" ON public.profiles;
+DROP POLICY IF EXISTS "profiles_update_by_doctor" ON public.profiles;
+
+-- Own profile; verified doctors see everyone (to approve sign-ups);
+-- verified ASHAs also see mother profiles.
+CREATE POLICY "profiles_select" ON public.profiles FOR SELECT
+USING (
+    auth.uid() = id
+    OR public.is_active_doctor()
+    OR (public.is_active_worker() AND role = 'mother')
+);
+
+-- A user can edit their own details but can NOT change their role or
+-- approve themselves.
+CREATE POLICY "profiles_update_own" ON public.profiles FOR UPDATE
+USING (auth.uid() = id)
+WITH CHECK (
+    auth.uid() = id
+    AND role = public.role_of(auth.uid())
+    AND account_status = public.status_of(auth.uid())
+);
+
+-- A verified doctor can approve / reject other accounts (role cannot change).
+CREATE POLICY "profiles_update_by_doctor" ON public.profiles FOR UPDATE
+USING (public.is_active_doctor())
+WITH CHECK (public.is_active_doctor() AND role = public.role_of(id));
+
+-- ----------------------------------------------------------------------------
+-- 3. EXTRA COLUMNS the app needs on maternal_patients / visit_records
+-- ----------------------------------------------------------------------------
+ALTER TABLE public.maternal_patients
+    ADD COLUMN IF NOT EXISTS assigned_asha_name  TEXT,
+    ADD COLUMN IF NOT EXISTS assigned_asha_phone TEXT,
+    ADD COLUMN IF NOT EXISTS assigned_doctor_name TEXT,
+    ADD COLUMN IF NOT EXISTS preferred_language  TEXT,
+    ADD COLUMN IF NOT EXISTS selected_state      TEXT,
+    ADD COLUMN IF NOT EXISTS selected_district   TEXT,
+    ADD COLUMN IF NOT EXISTS language_onboarding_completed BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS asha_assisted_onboarding JSONB,
+    ADD COLUMN IF NOT EXISTS registered_by_id    UUID REFERENCES public.profiles(id) ON DELETE SET NULL;
+
+ALTER TABLE public.visit_records
+    ADD COLUMN IF NOT EXISTS recorded_by_name TEXT;
+
+-- Relax limits that blocked legitimate field data
+ALTER TABLE public.visit_records ALTER COLUMN weight_kg TYPE NUMERIC(5, 1);
+ALTER TABLE public.visit_records ALTER COLUMN hemoglobin TYPE NUMERIC(4, 1);
+
+CREATE INDEX IF NOT EXISTS idx_patients_updated   ON public.maternal_patients (updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_patients_phone     ON public.maternal_patients (phone);
+CREATE INDEX IF NOT EXISTS idx_visits_mother_date ON public.visit_records (mother_id, date DESC);
+
+-- Keep updated_at fresh
+CREATE OR REPLACE FUNCTION public.set_updated_at()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    NEW.updated_at := now();
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_patients_updated_at ON public.maternal_patients;
+CREATE TRIGGER trg_patients_updated_at
+    BEFORE UPDATE ON public.maternal_patients
+    FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+-- ----------------------------------------------------------------------------
+-- 4. SHARED ACCESS POLICIES - maternal_patients
+-- ----------------------------------------------------------------------------
+DROP POLICY IF EXISTS "Mothers can view only their own record" ON public.maternal_patients;
+DROP POLICY IF EXISTS "ASHA can view assigned patients" ON public.maternal_patients;
+DROP POLICY IF EXISTS "ASHA can insert new mother registrations" ON public.maternal_patients;
+DROP POLICY IF EXISTS "ASHA can update assigned mother records" ON public.maternal_patients;
+DROP POLICY IF EXISTS "Doctors can view and manage PHC patients" ON public.maternal_patients;
+DROP POLICY IF EXISTS "patients_select" ON public.maternal_patients;
+DROP POLICY IF EXISTS "patients_insert_worker" ON public.maternal_patients;
+DROP POLICY IF EXISTS "patients_insert_self" ON public.maternal_patients;
+DROP POLICY IF EXISTS "patients_update_worker" ON public.maternal_patients;
+DROP POLICY IF EXISTS "patients_delete_doctor" ON public.maternal_patients;
+
+-- Any verified ASHA / Doctor sees ALL patients; a mother sees only herself.
+CREATE POLICY "patients_select" ON public.maternal_patients FOR SELECT
+USING (public.is_active_worker() OR user_id = auth.uid());
+
+-- Any verified ASHA / Doctor can register a mother.
+CREATE POLICY "patients_insert_worker" ON public.maternal_patients FOR INSERT
+WITH CHECK (public.is_active_worker());
+
+-- A mother may create her OWN record (self-registration).
+CREATE POLICY "patients_insert_self" ON public.maternal_patients FOR INSERT
+WITH CHECK (user_id = auth.uid() AND public.role_of(auth.uid()) = 'mother');
+
+-- Any verified ASHA / Doctor can update a record (e.g. after a new visit).
+CREATE POLICY "patients_update_worker" ON public.maternal_patients FOR UPDATE
+USING (public.is_active_worker())
+WITH CHECK (public.is_active_worker());
+
+-- Only doctors can delete.
+CREATE POLICY "patients_delete_doctor" ON public.maternal_patients FOR DELETE
+USING (public.is_active_doctor());
+
+-- ----------------------------------------------------------------------------
+-- 5. SHARED ACCESS POLICIES - visit_records (health reports)
+-- ----------------------------------------------------------------------------
+DROP POLICY IF EXISTS "Mothers can view own visits" ON public.visit_records;
+DROP POLICY IF EXISTS "ASHA workers can view assigned visits" ON public.visit_records;
+DROP POLICY IF EXISTS "ASHA workers can insert visit records" ON public.visit_records;
+DROP POLICY IF EXISTS "Doctors can view and update visit records" ON public.visit_records;
+DROP POLICY IF EXISTS "visits_select" ON public.visit_records;
+DROP POLICY IF EXISTS "visits_insert_worker" ON public.visit_records;
+DROP POLICY IF EXISTS "visits_update_doctor" ON public.visit_records;
+DROP POLICY IF EXISTS "visits_delete_doctor" ON public.visit_records;
+
+CREATE POLICY "visits_select" ON public.visit_records FOR SELECT
+USING (
+    public.is_active_worker()
+    OR mother_id IN (SELECT id FROM public.maternal_patients WHERE user_id = auth.uid())
+);
+
+-- Any verified worker can add a visit; it must be recorded under their own id.
+CREATE POLICY "visits_insert_worker" ON public.visit_records FOR INSERT
+WITH CHECK (public.is_active_worker() AND recorded_by_id = auth.uid());
+
+-- Only doctors can add a review / edit a visit afterwards.
+CREATE POLICY "visits_update_doctor" ON public.visit_records FOR UPDATE
+USING (public.is_active_doctor())
+WITH CHECK (public.is_active_doctor());
+
+CREATE POLICY "visits_delete_doctor" ON public.visit_records FOR DELETE
+USING (public.is_active_doctor());
+
+-- ----------------------------------------------------------------------------
+-- 6. MILESTONES
+-- ----------------------------------------------------------------------------
+DROP POLICY IF EXISTS "Users can view milestones for authorized patients" ON public.milestones;
+DROP POLICY IF EXISTS "milestones_select" ON public.milestones;
+
+CREATE POLICY "milestones_select" ON public.milestones FOR SELECT
+USING (
+    public.is_active_worker()
+    OR mother_id IN (SELECT id FROM public.maternal_patients WHERE user_id = auth.uid())
+);
+
+-- ----------------------------------------------------------------------------
+-- 7. PERMISSIONS + REALTIME
+-- ----------------------------------------------------------------------------
+GRANT USAGE ON SCHEMA public TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE
+    ON public.profiles, public.maternal_patients, public.visit_records, public.milestones
+    TO authenticated;
+
+-- Make changes appear live on every other signed-in device.
+DO $$
+DECLARE
+    t TEXT;
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
+        FOREACH t IN ARRAY ARRAY['maternal_patients', 'visit_records'] LOOP
+            BEGIN
+                EXECUTE format('ALTER PUBLICATION supabase_realtime ADD TABLE public.%I', t);
+            EXCEPTION WHEN duplicate_object THEN
+                NULL; -- already added
+            END;
+        END LOOP;
+    END IF;
+END $$;

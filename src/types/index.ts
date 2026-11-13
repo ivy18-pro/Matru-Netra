@@ -53,6 +53,7 @@ export interface User {
 
 export interface Mother {
   id: string;
+  userId?: string; // linked login account (when the mother registered herself)
   name: string;
   age: number;
   husbandName: string;
@@ -145,9 +146,10 @@ export interface Milestone {
 
 export interface OfflineQueueItem {
   id: string;
-  type: 'RECORD_VISIT' | 'REGISTER_MOTHER' | 'DOCTOR_REVIEW' | 'UPDATE_MILESTONE';
+  type: 'RECORD_VISIT' | 'REGISTER_MOTHER' | 'DOCTOR_REVIEW' | 'UPDATE_MILESTONE' | 'UPDATE_MOTHER';
   timestamp: string;
   summary: string;
   payload: any;
   status: 'queued' | 'syncing' | 'synced' | 'failed';
+  error?: string; // why a permanent upload failure was rejected
 }

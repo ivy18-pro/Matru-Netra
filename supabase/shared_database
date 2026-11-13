@@ -1,0 +1,60 @@
+# Shared patient database — setup (about 10 minutes)
+
+Until this is done the app runs in **demo mode**: every browser keeps its own private copy
+of the data, so one ASHA worker cannot see another's patients. After this setup all verified
+ASHA workers and doctors read and write the **same** central database.
+
+## 1. Create the Supabase project
+1. Go to https://supabase.com → **New project** (free plan is enough).
+2. Wait until it finishes starting.
+
+## 2. Create the tables and sharing rules
+1. In Supabase open **SQL Editor → New query**.
+2. Paste the whole of `supabase/schema.sql` → **Run**.
+3. New query → paste the whole of `supabase/shared_records.sql` → **Run**.
+   (Safe to run again; it fixes the policies and enables sharing + live updates.)
+
+## 3. Turn off email confirmation (recommended for a demo / hackathon)
+**Authentication → Providers → Email → "Confirm email" OFF.**
+Otherwise new users must click a link before they can sign in.
+
+## 4. Give the app the project keys
+**Project Settings → API** → copy *Project URL* and the *anon public* key.
+
+* Local computer: copy `.env.example` to `.env` and fill in
+  `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`, then `npm run dev`.
+* Hosted site (Vercel / Netlify): add the same two variables in the host's
+  *Environment Variables* settings, then **redeploy** (they are read at build time).
+
+Never put the `service_role` key in the app.
+
+## 5. Create the first doctor (who then approves everyone else)
+New Doctor / ASHA sign-ups start as **pending** and can see no patient data until a verified
+doctor approves them inside the app. The very first doctor has to be activated by you:
+
+1. Register a Doctor account in the app.
+2. In Supabase **SQL Editor** run (use that doctor's email):
+```sql
+update public.profiles
+   set account_status = 'active', designation = 'Verified Medical Officer', verified_by = 'Admin'
+ where email = 'doctor@example.com';
+```
+3. Sign in as that doctor → the **pending approvals** panel lists new ASHA workers and doctors → **Approve**.
+
+## 6. Check it works
+Open the app on two devices (or a normal and a private window), sign in as two different
+approved ASHA workers, register a mother on one — she appears on the other within seconds.
+
+## Who can see what
+| Account | Mothers & reports |
+|---|---|
+| Verified ASHA / Doctor | all (shared) — can register mothers and add visit reports |
+| Doctor only | add clinical review, delete, approve accounts |
+| Mother | only her own record |
+| Pending / rejected | nothing |
+
+## Offline behaviour
+Without internet the worker can still register mothers and record visits. They are saved on the
+device, shown as "Pending synchronisation", and uploaded automatically (in order, without
+duplicates) the moment the device is online again. The badge at the top of each dashboard shows
+the status.

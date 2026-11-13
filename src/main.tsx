@@ -21,4 +21,3 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
       .catch((err) => console.warn('Offline cache (service worker) not registered:', err));
   });
 }
-
